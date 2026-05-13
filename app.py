@@ -70,12 +70,13 @@ def process():
             indices += [a, b, c]
 
         out_groups.append({
-            'name':    f'group_{i}',
-            'tiles':   len(grp),
-            'verts':   verts,
-            'normals': norms,
-            'uvs':     uvs,
-            'indices': indices,
+            'name':     f'group_{i}',
+            'tiles':    len(grp),
+            'material': merged.material,
+            'verts':    verts,
+            'normals':  norms,
+            'uvs':      uvs,
+            'indices':  indices,
         })
 
     return jsonify({

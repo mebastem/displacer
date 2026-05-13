@@ -67,6 +67,26 @@
   }
   #btn-reset:hover { background: #25253a; color: #fff; }
 
+  #btn-tex {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-tex:hover { background: #25253a; color: #fff; }
+  #btn-tex.has-tex { border-color: #4a7a4a; color: #7adf7a; }
+
+  .tex-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #4a7a4a;
+    flex-shrink: 0;
+  }
+
   #toggle-wire {
     padding: 7px 14px;
     background: #1e1e2a;
@@ -250,9 +270,11 @@
   <h1>DISPLACER <span class="tag">VMF → 3D</span></h1>
   <button id="toggle-wire">Wireframe</button>
   <button id="btn-reset">Reset View</button>
+  <button id="btn-tex">Load Textures</button>
   <button id="btn-export" disabled>Export OBJ</button>
   <button id="btn-load">Load VMF</button>
   <input type="file" id="file-input" accept=".vmf" style="display:none">
+  <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
 </div>
 
 <!-- Main -->
@@ -436,6 +458,7 @@ function buildScene(data) {
 
   updateWireframes();
   showAll();
+  applyTextures();
 }
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
@@ -458,9 +481,13 @@ function buildGroupList(data) {
     const hex   = '#' + color.toString(16).padStart(6, '0');
     const item  = document.createElement('div');
     item.className = 'group-item';
+    const matLeaf = grp.material ? grp.material.split(/[/\\]/).pop() : '';
     item.innerHTML = `
       <div class="group-dot" style="background:${hex}"></div>
-      <span>${grp.name}</span>
+      <div style="flex:1;min-width:0">
+        <div>${grp.name}</div>
+        <div style="font-size:10px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${grp.material}">${matLeaf}</div>
+      </div>
       <span class="group-tiles">${grp.tiles} tile${grp.tiles !== 1 ? 's' : ''}</span>
     `;
     item.addEventListener('click', () => selectGroup(i));
@@ -497,6 +524,58 @@ document.getElementById('btn-reset').addEventListener('click', resetView);
 window.addEventListener('keydown', e => {
   if (e.key === 'f' || e.key === 'F' || e.key === 'Home') resetView();
 });
+
+// ── Texture loading ───────────────────────────────────────────────────────────
+const texLoader = new THREE.TextureLoader();
+const loadedTextures = {};  // leaf name (lowercase) → THREE.Texture
+
+document.getElementById('btn-tex').addEventListener('click', () => {
+  document.getElementById('tex-input').click();
+});
+
+document.getElementById('tex-input').addEventListener('change', e => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  let loaded = 0;
+  files.forEach(file => {
+    const leaf = file.name.replace(/\.[^.]+$/, '').toLowerCase();
+    const url  = URL.createObjectURL(file);
+    const tex  = texLoader.load(url, img => {
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(1 / img.image.width, 1 / img.image.height);
+      tex.anisotropy    = renderer.capabilities.getMaxAnisotropy();
+      tex.generateMipmaps = false;
+      tex.minFilter     = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      loadedTextures[leaf] = tex;
+      loaded++;
+      applyTextures();
+      if (loaded === files.length)
+        document.getElementById('btn-tex').classList.add('has-tex');
+    });
+  });
+  // reset so same files can be re-selected
+  e.target.value = '';
+});
+
+function applyTextures() {
+  if (!lastData) return;
+  lastData.groups.forEach((grp, i) => {
+    const leaf = grp.material ? grp.material.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
+    const tex  = loadedTextures[leaf];
+    const mesh = groupMeshes[i];
+    if (!mesh) return;
+    if (tex) {
+      mesh.material.map          = tex;
+      mesh.material.color.set(0xffffff);  // white so texture shows true color
+      mesh.material.needsUpdate  = true;
+      // Mark matched in sidebar
+      const dot = document.querySelectorAll('.group-item')[i]?.querySelector('.group-dot');
+      if (dot) dot.classList.add('tex-dot');
+    }
+  });
+}
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function updateStats(data) {

@@ -60,12 +60,24 @@ class DispInfo:
 
 
 @dataclass
+class TexAxes:
+    udir:    Vec3
+    uoffset: float
+    uscale:  float
+    vdir:    Vec3
+    voffset: float
+    vscale:  float
+
+
+@dataclass
 class DispSide:
     solid_id:      int
     side_id:       int
     plane_pts:     List[Vec3]        # 3 points defining the face plane (VMF CCW winding)
     sibling_planes: List[List[Vec3]] # all planes in the parent solid
     dispinfo:      DispInfo
+    material:      str = 'NODRAW'
+    tex_axes:      Optional['TexAxes'] = None
 
 
 @dataclass
@@ -74,6 +86,7 @@ class Mesh:
     normals:  List[Vec3]
     uvs:      List[Tuple[float,float]]
     tris:     List[Tuple[int,int,int]]  # 0-based vertex indices
+    material: str = 'NODRAW'
 
     def bbox(self):
         xs = [v[0] for v in self.verts]
@@ -133,6 +146,13 @@ def parse_vec3(s: str) -> Vec3:
 
 def parse_plane(s: str) -> List[Vec3]:
     return [parse_vec3(g) for g in re.findall(r'\(([^)]+)\)', s)]
+
+def parse_tex_axis(s: str) -> Optional[Tuple]:
+    """Parse VMF '[ux uy uz offset] scale' into (dir, offset, scale)."""
+    nums = list(map(float, re.findall(r'-?[\d.eE+\-]+', s)))
+    if len(nums) < 5:
+        return None
+    return (nums[0], nums[1], nums[2]), nums[3], nums[4]
 
 def parse_row_vecs(s: str, n: int) -> List[Vec3]:
     nums = list(map(float, s.split()))
@@ -206,9 +226,16 @@ def extract_disp_sides(blocks: List[dict]) -> List[DispSide]:
                         if isinstance(di_raw, list): di_raw = di_raw[0]
                         power    = int(di_raw.get('power', 2))
                         di       = read_dispinfo(di_raw, power)
+                        mat      = s.get('material', 'NODRAW').strip()
+                        ta       = None
+                        u_raw    = parse_tex_axis(s.get('uaxis', ''))
+                        v_raw    = parse_tex_axis(s.get('vaxis', ''))
+                        if u_raw and v_raw:
+                            ta = TexAxes(udir=u_raw[0], uoffset=u_raw[1], uscale=u_raw[2],
+                                         vdir=v_raw[0], voffset=v_raw[1], vscale=v_raw[2])
                         results.append(DispSide(solid_id=sid, side_id=side_id,
                                                 plane_pts=pts, sibling_planes=all_planes,
-                                                dispinfo=di))
+                                                dispinfo=di, material=mat, tex_axes=ta))
                     walk(item, sid)
 
                 elif item_name != 'side' and key != 'side':
@@ -395,7 +422,14 @@ def build_mesh(ds: DispSide) -> Mesh:
             else:
                 pos = vadd(base, off)
             verts.append(pos)
-            uvs.append((s, t))
+            # UV: use VMF texture projection if available, else fall back to grid 0-1
+            if ds.tex_axes:
+                ta = ds.tex_axes
+                u = (vdot(pos, ta.udir) + ta.uoffset) / ta.uscale
+                v = (vdot(pos, ta.vdir) + ta.voffset) / ta.vscale
+                uvs.append((u, v))
+            else:
+                uvs.append((s, t))
 
     tris: List[Tuple[int,int,int]] = []
     for row in range(size-1):
@@ -421,7 +455,7 @@ def build_mesh(ds: DispSide) -> Mesh:
         accum[k] = vadd(accum[k], fn)
     norms: List[Vec3] = [vnorm(n) for n in accum]
 
-    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris)
+    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris, material=ds.material)
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +528,12 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
                     nb=(bx+dx,by+dy,bz+dz)
                     if nb in bmap: yield from bmap[nb]
 
+    # UV weld threshold: only merge vertices whose UVs are also close.
+    # Tiles sharing the same texture axes will have matching UVs at seams;
+    # tiles with different axes will differ significantly → keep them separate
+    # so each tile interpolates its own correct UVs without smearing.
+    UV_THRESH = 2.0  # texels
+
     remap = list(range(len(all_v)))
     done: Set[int] = set()
     for i in range(len(all_v)):
@@ -501,8 +541,11 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
         v = all_v[i]
         for j in nbrs(_bucket(v, cell)):
             if j <= i or j in done: continue
-            if vlen(vsub(v, all_v[j])) <= weld:
-                remap[j] = i; done.add(j)
+            if vlen(vsub(v, all_v[j])) > weld: continue
+            ui, vi_uv = all_uv[i]
+            uj, vj_uv = all_uv[j]
+            if abs(ui - uj) > UV_THRESH or abs(vi_uv - vj_uv) > UV_THRESH: continue
+            remap[j] = i; done.add(j)
         done.add(i)
 
     canon: Dict[int,int] = {}
@@ -527,30 +570,52 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
         a,b,c = canon[remap[i]], canon[remap[j]], canon[remap[k]]
         if a != b and b != c and a != c: nt.append((a,b,c))
 
-    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt)
+    # Use the most common material in the group
+    from collections import Counter
+    dominant_mat = Counter(m.material for m in meshes).most_common(1)[0][0]
+
+    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt, material=dominant_mat)
 
 
 # ---------------------------------------------------------------------------
 # OBJ writer
 # ---------------------------------------------------------------------------
 
+def _mtl_name(material: str) -> str:
+    """Sanitise a Source material path into a valid MTL material name."""
+    return material.replace('/', '_').replace('\\', '_').replace(' ', '_')
+
+
 def write_obj(path: Path, mesh: Mesh, name: str) -> None:
     """
-    Write a Wavefront OBJ.
-    - Coordinates are kept in Source units (no scaling).
-    - Y-up: Source uses Z-up, so we swap Y and Z so Blender shows it correctly
-      when imported with default settings (Z-forward, Y-up).
+    Write a Wavefront OBJ + companion MTL file.
+    - Coordinates kept in Source units; Y/Z swapped for Blender (Z-forward, Y-up).
+    - UVs are in Source texel space (dot-product projection); they tile correctly
+      once the matching texture is assigned in Blender.
     """
+    mtl_filename = path.with_suffix('.mtl').name
+    mat_name     = _mtl_name(mesh.material)
+
+    # MTL
+    with open(path.with_suffix('.mtl'), 'w') as f:
+        f.write(f"# vmf_disp_to_obj — {name}\n")
+        f.write(f"newmtl {mat_name}\n")
+        f.write(f"# Source material: {mesh.material}\n")
+        # map_Kd points to where the user should put the converted texture
+        tex_leaf = mesh.material.replace('\\', '/').split('/')[-1]
+        f.write(f"map_Kd {tex_leaf}.bmp\n")
+
     with open(path, 'w') as f:
         f.write(f"# vmf_disp_to_obj — {name}\n")
+        f.write(f"mtllib {mtl_filename}\n")
         f.write(f"o {name}\n\n")
 
-        # Vertices: swap Y/Z to convert Source (Z-up) to Blender (Y-up)
+        # Vertices: swap Y/Z for Blender Y-up
         for (x, y, z) in mesh.verts:
             f.write(f"v {x:.4f} {z:.4f} {-y:.4f}\n")
         f.write("\n")
 
-        # UVs
+        # UVs — texel-space projection from VMF texture axes
         for (u, v) in mesh.uvs:
             f.write(f"vt {u:.6f} {v:.6f}\n")
         f.write("\n")
@@ -560,12 +625,9 @@ def write_obj(path: Path, mesh: Mesh, name: str) -> None:
             f.write(f"vn {nx:.6f} {nz:.6f} {-ny:.6f}\n")
         f.write("\n")
 
-        # Faces — OBJ is 1-indexed; format: v/vt/vn
-        f.write("usemtl displacement\n")
+        f.write(f"usemtl {mat_name}\n")
         for (i, j, k) in mesh.tris:
-            # Each vertex uses its own index for pos, uv, and normal
-            # (they share the same index since we store them in lockstep)
-            i1,j1,k1 = i+1, j+1, k+1
+            i1, j1, k1 = i+1, j+1, k+1
             f.write(f"f {i1}/{i1}/{i1} {j1}/{j1}/{j1} {k1}/{k1}/{k1}\n")
 
 
