@@ -1,0 +1,15 @@
+# Generated output
+disp_obj/
+disp_models/
+formesa/
+
+# Test / source maps (large files, not part of the tool)
+*.vmf
+*.bsp
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Screenshots / scratch files
+*.png
