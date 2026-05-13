@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Displacer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f0f13;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Top bar ─────────────────────────────────────────── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: #18181f;
+    border-bottom: 1px solid #2a2a38;
+    flex-shrink: 0;
+  }
+  #topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: 1px; color: #fff; }
+  #topbar .tag { font-size: 11px; color: #666; margin-left: 4px; }
+
+  #btn-load {
+    margin-left: auto;
+    padding: 7px 18px;
+    background: #4a6cf7;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  #btn-load:hover { background: #3a5ce0; }
+
+  #btn-export {
+    padding: 7px 18px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-export:hover:not(:disabled) { background: #25253a; color: #fff; }
+  #btn-export:disabled { opacity: .4; cursor: default; }
+
+  #btn-reset {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-reset:hover { background: #25253a; color: #fff; }
+
+  #toggle-wire {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #toggle-wire:hover { background: #25253a; color: #fff; }
+  #toggle-wire.active { background: #2a3a5a; color: #7aadff; border-color: #4a6cf7; }
+
+  /* ── Main layout ──────────────────────────────────────── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ──────────────────────────────────────────── */
+  #sidebar {
+    width: 220px;
+    background: #13131a;
+    border-right: 1px solid #2a2a38;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  #sidebar-header {
+    padding: 12px 14px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #555;
+    border-bottom: 1px solid #1e1e28;
+  }
+
+  #stats {
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #666;
+    border-bottom: 1px solid #1e1e28;
+    line-height: 1.6;
+  }
+  #stats span { color: #9ab; }
+
+  #group-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+  }
+  #group-list::-webkit-scrollbar { width: 4px; }
+  #group-list::-webkit-scrollbar-track { background: transparent; }
+  #group-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+  .group-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #aaa;
+    transition: background .1s;
+    user-select: none;
+  }
+  .group-item:hover { background: #1a1a25; }
+  .group-item.selected { background: #1e2035; color: #fff; }
+
+  .group-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .group-tiles {
+    margin-left: auto;
+    font-size: 10px;
+    color: #444;
+  }
+
+  #show-all {
+    padding: 10px 14px;
+    font-size: 12px;
+    color: #4a6cf7;
+    cursor: pointer;
+    border-top: 1px solid #1e1e28;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  #show-all:hover { background: #1a1a25; }
+
+  /* ── Drop zone / viewport ─────────────────────────────── */
+  #viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #drop-zone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: #0f0f13;
+    z-index: 10;
+    transition: background .2s;
+  }
+  #drop-zone.drag-over { background: #14142a; }
+  #drop-zone.hidden { display: none; }
+
+  #drop-icon {
+    font-size: 48px;
+    opacity: .3;
+  }
+  #drop-text {
+    font-size: 18px;
+    font-weight: 500;
+    color: #555;
+  }
+  #drop-sub {
+    font-size: 13px;
+    color: #333;
+  }
+
+  #canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── Overlay spinner ──────────────────────────────────── */
+  #loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(10,10,16,.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    z-index: 20;
+    display: none;
+  }
+  #loading.visible { display: flex; }
+
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #222;
+    border-top-color: #4a6cf7;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #loading-text { font-size: 14px; color: #666; }
+
+  /* ── HUD ──────────────────────────────────────────────── */
+  #hud {
+    position: absolute;
+    bottom: 14px;
+    right: 14px;
+    font-size: 11px;
+    color: #333;
+    text-align: right;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+  <h1>DISPLACER <span class="tag">VMF → 3D</span></h1>
+  <button id="toggle-wire">Wireframe</button>
+  <button id="btn-reset">Reset View</button>
+  <button id="btn-export" disabled>Export OBJ</button>
+  <button id="btn-load">Load VMF</button>
+  <input type="file" id="file-input" accept=".vmf" style="display:none">
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-header">Groups</div>
+    <div id="stats">No file loaded</div>
+    <div id="group-list"></div>
+    <div id="show-all" style="display:none">Show all</div>
+  </div>
+
+  <!-- Viewport -->
+  <div id="viewport">
+    <!-- Drop zone -->
+    <div id="drop-zone">
+      <div id="drop-icon">⬆</div>
+      <div id="drop-text">Drop a VMF file here</div>
+      <div id="drop-sub">or click "Load VMF" above</div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div id="loading">
+      <div class="spinner"></div>
+      <div id="loading-text">Processing…</div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+    <div id="hud">Scroll: zoom &nbsp;·&nbsp; Left drag: orbit &nbsp;·&nbsp; Right/Middle drag: pan &nbsp;·&nbsp; F: reset view</div>
+  </div>
+</div>
+
+<!-- Three.js r158 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Palette ──────────────────────────────────────────────────────────────────
+const PALETTE = [
+  0x4a6cf7, 0xf76a4a, 0x4af7a0, 0xf7e24a,
+  0xc44af7, 0x4ad4f7, 0xf74a9a, 0xa0f74a,
+  0xf7a04a, 0x4af7e2, 0x7a4af7, 0xf7f74a,
+];
+
+// ── Three.js setup ───────────────────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0f0f13);
+renderer.shadowMap.enabled = true;
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 1, 1e7);
+camera.position.set(0, 3000, 6000);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping    = true;
+controls.dampingFactor    = 0.06;
+controls.rotateSpeed      = 0.7;
+controls.zoomSpeed        = 1.2;
+controls.panSpeed         = 0.8;
+controls.screenSpacePanning = true;
+controls.minPolarAngle    = 0;
+controls.maxPolarAngle    = Math.PI * 0.9; // prevent flipping under ground
+
+// Save initial camera state for reset
+let savedTarget   = new THREE.Vector3();
+let savedPosition = new THREE.Vector3();
+let savedNear = 1, savedFar = 1e7;
+let hasSavedView  = false;
+
+function saveView() {
+  savedTarget.copy(controls.target);
+  savedPosition.copy(camera.position);
+  savedNear = camera.near;
+  savedFar  = camera.far;
+  hasSavedView = true;
+}
+
+function resetView() {
+  if (!hasSavedView) return;
+  controls.target.copy(savedTarget);
+  camera.position.copy(savedPosition);
+  camera.near = savedNear;
+  camera.far  = savedFar;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(5000, 8000, 3000);
+scene.add(sun);
+
+// Grid
+const grid = new THREE.GridHelper(50000, 100, 0x222233, 0x1a1a28);
+scene.add(grid);
+
+// Resize
+function resize() {
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Render loop
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let groupMeshes  = [];   // Three.js meshes, one per group
+let groupWires   = [];   // wireframe overlays
+let wireMode     = false;
+let lastData     = null; // raw JSON from server
+let selectedIdx  = -1;
+
+// ── Build scene from server response ─────────────────────────────────────────
+function buildScene(data) {
+  // Clear old meshes
+  groupMeshes.forEach(m => scene.remove(m));
+  groupWires.forEach(w => scene.remove(w));
+  groupMeshes = []; groupWires = [];
+
+  const box = new THREE.Box3();
+
+  data.groups.forEach((grp, i) => {
+    const color = PALETTE[i % PALETTE.length];
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(grp.verts, 3));
+    geo.setAttribute('uv',       new THREE.Float32BufferAttribute(grp.uvs,   2));
+    geo.setIndex(grp.indices);
+    geo.computeVertexNormals();
+
+    const mat  = new THREE.MeshStandardMaterial({ color, roughness: .8, metalness: .1, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.groupIdx = i;
+    mesh.userData.color    = color;
+    scene.add(mesh);
+    groupMeshes.push(mesh);
+    box.expandByObject(mesh);
+
+    // Wireframe overlay
+    const wmat  = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true, transparent: true, opacity: .25 });
+    const wire  = new THREE.Mesh(geo, wmat);
+    wire.visible = false;
+    scene.add(wire);
+    groupWires.push(wire);
+  });
+
+  // Fit camera to scene
+  if (!box.isEmpty()) {
+    const center = box.getCenter(new THREE.Vector3());
+    const size   = box.getSize(new THREE.Vector3()).length();
+    controls.target.copy(center);
+    camera.position.copy(center).add(new THREE.Vector3(0, size * .4, size * .8));
+    camera.near = size / 1000;
+    camera.far  = size * 10;
+    camera.updateProjectionMatrix();
+    controls.update();
+    saveView();
+  }
+
+  updateWireframes();
+  showAll();
+}
+
+// ── Wireframe toggle ──────────────────────────────────────────────────────────
+function updateWireframes() {
+  groupWires.forEach(w => { w.visible = wireMode; });
+}
+
+document.getElementById('toggle-wire').addEventListener('click', function () {
+  wireMode = !wireMode;
+  this.classList.toggle('active', wireMode);
+  updateWireframes();
+});
+
+// ── Group list ────────────────────────────────────────────────────────────────
+function buildGroupList(data) {
+  const list = document.getElementById('group-list');
+  list.innerHTML = '';
+  data.groups.forEach((grp, i) => {
+    const color = PALETTE[i % PALETTE.length];
+    const hex   = '#' + color.toString(16).padStart(6, '0');
+    const item  = document.createElement('div');
+    item.className = 'group-item';
+    item.innerHTML = `
+      <div class="group-dot" style="background:${hex}"></div>
+      <span>${grp.name}</span>
+      <span class="group-tiles">${grp.tiles} tile${grp.tiles !== 1 ? 's' : ''}</span>
+    `;
+    item.addEventListener('click', () => selectGroup(i));
+    list.appendChild(item);
+  });
+  document.getElementById('show-all').style.display = 'block';
+}
+
+function selectGroup(idx) {
+  selectedIdx = idx;
+  // Dim others, highlight selected
+  groupMeshes.forEach((m, i) => {
+    m.visible = (i === idx);
+    groupWires[i].visible = wireMode && (i === idx);
+  });
+  document.querySelectorAll('.group-item').forEach((el, i) => {
+    el.classList.toggle('selected', i === idx);
+  });
+}
+
+function showAll() {
+  selectedIdx = -1;
+  groupMeshes.forEach((m, i) => {
+    m.visible = true;
+    groupWires[i].visible = wireMode;
+  });
+  document.querySelectorAll('.group-item').forEach(el => el.classList.remove('selected'));
+}
+
+document.getElementById('show-all').addEventListener('click', showAll);
+
+// Reset view button + F key shortcut
+document.getElementById('btn-reset').addEventListener('click', resetView);
+window.addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F' || e.key === 'Home') resetView();
+});
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats(data) {
+  document.getElementById('stats').innerHTML =
+    `File: <span>${data.filename}</span><br>` +
+    `Displacements: <span>${data.total_disps}</span><br>` +
+    `Groups: <span>${data.groups.length}</span>`;
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (!lastData) return;
+  const groups = selectedIdx >= 0 ? [lastData.groups[selectedIdx]] : lastData.groups;
+  groups.forEach(grp => {
+    const lines = [`# ${grp.name}`, `o ${grp.name}`, ''];
+    const verts   = grp.verts;
+    const normals = grp.normals;
+    const uvs     = grp.uvs;
+    const idx     = grp.indices;
+
+    for (let i = 0; i < verts.length; i += 3)
+      lines.push(`v ${verts[i].toFixed(4)} ${verts[i+1].toFixed(4)} ${verts[i+2].toFixed(4)}`);
+    lines.push('');
+    for (let i = 0; i < uvs.length; i += 2)
+      lines.push(`vt ${uvs[i].toFixed(6)} ${uvs[i+1].toFixed(6)}`);
+    lines.push('');
+    for (let i = 0; i < normals.length; i += 3)
+      lines.push(`vn ${normals[i].toFixed(6)} ${normals[i+1].toFixed(6)} ${normals[i+2].toFixed(6)}`);
+    lines.push('');
+    lines.push('usemtl displacement');
+    for (let i = 0; i < idx.length; i += 3) {
+      const a = idx[i]+1, b = idx[i+1]+1, c = idx[i+2]+1;
+      lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`);
+    }
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${grp.name}.obj`;
+    a.click();
+  });
+});
+
+// ── Upload / process ──────────────────────────────────────────────────────────
+async function processFile(file) {
+  const loading = document.getElementById('loading');
+  const loadingText = document.getElementById('loading-text');
+  loading.classList.add('visible');
+  loadingText.textContent = `Processing ${file.name}…`;
+
+  const form = new FormData();
+  form.append('vmf', file);
+
+  try {
+    const res  = await fetch('/process', { method: 'POST', body: form });
+    const data = await res.json();
+
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+
+    lastData = data;
+    document.getElementById('drop-zone').classList.add('hidden');
+    document.getElementById('btn-export').disabled = false;
+    buildScene(data);
+    buildGroupList(data);
+    updateStats(data);
+  } catch (e) {
+    alert('Network error: ' + e.message);
+  } finally {
+    loading.classList.remove('visible');
+  }
+}
+
+// File input
+document.getElementById('btn-load').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files[0]) processFile(e.target.files[0]);
+});
+
+// Drag & drop
+const dropZone = document.getElementById('drop-zone');
+const viewport = document.getElementById('viewport');
+
+viewport.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+  dropZone.classList.remove('hidden');
+});
+viewport.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+viewport.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.vmf')) processFile(file);
+  else alert('Please drop a .vmf file.');
+});
+
+</script>
+</body>
+</html>
