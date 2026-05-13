@@ -267,6 +267,15 @@ def recover_corners(plane_pts: List[Vec3],
     def on_sib(pt, sn, sd) -> bool:
         return abs(vdot(sn, pt) - sd) < THRESH
 
+    # Helper: True if pts form a convex polygon wound CW (face_n is outward normal).
+    def _try_order(pts):
+        n = len(pts)
+        for k in range(n):
+            a, b, c = pts[k], pts[(k+1) % n], pts[(k+2) % n]
+            if vdot(vcross(vsub(b, a), vsub(c, a)), face_n) < -1e-6:
+                return False
+        return True
+
     # Collect non-parallel sibling planes.
     non_par = []
     for sib in sibling_planes:
@@ -278,10 +287,16 @@ def recover_corners(plane_pts: List[Vec3],
         non_par.append((sn, sd))
 
     # Try every pair of sibling planes.  Each pair's 3-plane intersection with
-    # the face plane gives a candidate vertex.  We keep the candidate that is
-    # (a) not one of the 3 known corners and (b) closest to start_pos.
-    p3: Optional[Vec3] = None
-    best_dist = float('inf')
+    # the face plane gives a candidate vertex.  We keep the candidate that:
+    #   (a) is not one of the 3 known corners, and
+    #   (b) produces a valid convex quad with p0, p1, p2.
+    # Among convex-quad-forming candidates, prefer the one closest to the
+    # parallelogram prediction (exact for rectangular brushes, good reference).
+    para_pred = vadd(p0, vsub(p2, p1))   # parallelogram reference
+
+    convex_cands: List[Vec3] = []
+    other_cands:  List[Vec3] = []
+
     for i in range(len(non_par)):
         for j in range(i + 1, len(non_par)):
             cand = _intersect3(face_n, face_d,
@@ -292,27 +307,29 @@ def recover_corners(plane_pts: List[Vec3],
             # Skip if it coincides with a known corner
             if min(vlen(vsub(cand, pt)) for pt in [p0, p1, p2]) < THRESH:
                 continue
-            d = vlen(vsub(cand, start_pos))
-            if d < best_dist:
-                best_dist = d
-                p3 = cand
+            # Check whether this candidate forms a valid convex quad
+            makes_convex = any(
+                _try_order([p0, p1, p2][:pos] + [cand] + [p0, p1, p2][pos:])
+                for pos in range(4)
+            )
+            if makes_convex:
+                convex_cands.append(cand)
+            else:
+                other_cands.append(cand)
 
-    if p3 is None:
-        # Fallback: parallelogram assumption (correct for rectangular brushes)
-        p3 = vadd(p0, vsub(p2, p1))
+    # Pick from convex candidates first (closest to parallelogram reference),
+    # then fall back to non-convex candidates, then parallelogram itself.
+    def _score(c): return vlen(vsub(c, para_pred))
+
+    if convex_cands:
+        p3 = min(convex_cands, key=_score)
+    elif other_cands:
+        p3 = min(other_cands, key=_score)
+    else:
+        # Fallback: parallelogram assumption (exact for rectangular brushes)
+        p3 = para_pred
 
     # Sort all 4 corners into the correct CW order (viewed from outside).
-    # p0,p1,p2 are already CW; we find where p3 belongs by checking which
-    # insertion position produces a convex polygon (all cross products point
-    # in the same inward direction as face_n).
-    def _try_order(pts):
-        n = len(pts)
-        for k in range(n):
-            a, b, c = pts[k], pts[(k+1) % n], pts[(k+2) % n]
-            if vdot(vcross(vsub(b, a), vsub(c, a)), face_n) < -1e-6:
-                return False
-        return True
-
     corners: Optional[List[Vec3]] = None
     for pos in range(4):
         cand = [p0, p1, p2]
@@ -366,10 +383,17 @@ def build_mesh(ds: DispSide) -> Mesh:
         for col in range(size):
             s = col / (size - 1)
             base = vlerp(edge_a, edge_b, s)
-            n   = di.normals[row][col]
-            d   = di.distances[row][col]
-            off = di.offsets[row][col]
-            pos = vadd(base, vadd(vscale(n, d), off))
+            n_raw = di.normals[row][col]
+            n_len = vlen(n_raw)
+            d     = di.distances[row][col]
+            off   = di.offsets[row][col]
+            # Only apply displacement if normal is a valid direction.
+            # VMF normals should be unit vectors; re-normalize defensively.
+            if n_len > 1e-6:
+                n = vscale(n_raw, 1.0 / n_len)
+                pos = vadd(base, vadd(vscale(n, d), off))
+            else:
+                pos = vadd(base, off)
             verts.append(pos)
             uvs.append((s, t))
 

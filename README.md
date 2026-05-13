@@ -1,26 +1,44 @@
-# Source Displacement Extractor
+# Displacer
 
-Extracts displacement surfaces from Source Engine map files and exports them for use in Blender or GoldSrc.
+Extracts displacement surfaces from Source Engine VMF files and exports them for use in GoldSrc / Blender.
 
 ## Tools
 
-| Script | Input | Output | Use |
-|--------|-------|--------|-----|
-| `vmf_disp_to_obj.py` | `.vmf` | `.obj` | Displacement surfaces → Blender |
+| Script | What it does |
+|--------|-------------|
+| `vmf_disp_to_obj.py` | CLI — converts VMF displacements to Wavefront OBJ |
+| `app.py` | Web viewer — drag-and-drop VMF, inspect 3D in browser |
 
 ## Requirements
 
 - Python 3.7+
-- No third-party libraries
+- Flask (`pip install flask`) — only needed for the web viewer
 
-## Usage
+## Web Viewer
 
-### VMF → OBJ (Blender)
+```
+py -3 app.py
+```
+
+Opens at `http://127.0.0.1:5000` automatically.
+
+- Drag and drop a `.vmf` file or click **Load VMF**
+- Groups of displacement tiles are color-coded in the sidebar
+- Click a group to isolate it, **Show all** to bring everything back
+- **Wireframe** toggle overlays the mesh grid
+- **Export OBJ** downloads the current selection (or all groups) as OBJ files
+- **Reset View** / press **F** to snap the camera back to the loaded geometry
+
+Controls: scroll to zoom, left-drag to orbit, right-drag to pan.
+
+## CLI — VMF → OBJ
+
 ```
 py -3 vmf_disp_to_obj.py yourmap.vmf
 ```
 
 Options:
+
 ```
 -o, --output DIR      Output directory (default: ./disp_obj)
 --no-merge            One OBJ per tile instead of grouping by proximity
