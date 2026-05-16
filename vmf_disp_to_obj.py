@@ -110,29 +110,52 @@ class VMFParser:
 
     def _peek(self): return self._tok[self._pos] if self._pos < len(self._tok) else None
     def _next(self):
+        if self._pos >= len(self._tok):
+            raise EOFError("unexpected end of VMF")
         t = self._tok[self._pos]; self._pos += 1; return t
     def _uq(self, s): return s.strip('"')
 
     def _block(self) -> dict:
-        assert self._next() == '{', "expected {"
+        t = self._next()
+        if t != '{':
+            raise ValueError(f"expected '{{', got {t!r}")
         d: dict = {}
-        while self._peek() != '}':
+        while True:
+            p = self._peek()
+            if p is None:
+                break   # truncated file — return what we have
+            if p == '}':
+                self._next()
+                break
             k = self._uq(self._next())
-            v = self._block() if self._peek() == '{' else self._uq(self._next())
+            p2 = self._peek()
+            if p2 is None:
+                break
+            v = self._block() if p2 == '{' else self._uq(self._next())
             if k in d:
                 d[k] = d[k] if isinstance(d[k], list) else [d[k]]
                 d[k].append(v)
             else:
                 d[k] = v
-        self._next()  # consume '}'
         return d
 
     def parse(self) -> List[dict]:
         out = []
         while self._peek():
+            p = self._peek()
+            if p == '{':
+                # anonymous block — skip
+                self._block()
+                continue
             name = self._uq(self._next())
-            b = self._block(); b['__name__'] = name
-            out.append(b)
+            if self._peek() != '{':
+                continue   # bare key with no block, skip
+            try:
+                b = self._block()
+                b['__name__'] = name
+                out.append(b)
+            except (EOFError, ValueError):
+                break   # truncated/malformed — return what we parsed so far
         return out
 
 

@@ -304,11 +304,12 @@
     </div>
 
     <canvas id="canvas"></canvas>
-    <div id="hud">Scroll: zoom &nbsp;·&nbsp; Left drag: orbit &nbsp;·&nbsp; Right/Middle drag: pan &nbsp;·&nbsp; F: reset view</div>
+    <div id="hud">Click to capture mouse &nbsp;·&nbsp; Esc to release &nbsp;·&nbsp; WASD: fly &nbsp;·&nbsp; E/Q: up/down &nbsp;·&nbsp; Shift: fast &nbsp;·&nbsp; Scroll: speed &nbsp;·&nbsp; F: reset view</div>
   </div>
 </div>
 
 <!-- Three.js r158 -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -320,7 +321,6 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const PALETTE = [
@@ -330,49 +330,14 @@ const PALETTE = [
 ];
 
 // ── Three.js setup ───────────────────────────────────────────────────────────
-const canvas  = document.getElementById('canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+const canvas   = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setClearColor(0x0f0f13);
-renderer.shadowMap.enabled = true;
 
 const scene  = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, 1, 1, 1e7);
+const camera = new THREE.PerspectiveCamera(75, 1, 1, 1e7);
 camera.position.set(0, 3000, 6000);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping    = true;
-controls.dampingFactor    = 0.06;
-controls.rotateSpeed      = 0.7;
-controls.zoomSpeed        = 1.2;
-controls.panSpeed         = 0.8;
-controls.screenSpacePanning = true;
-controls.minPolarAngle    = 0;
-controls.maxPolarAngle    = Math.PI * 0.9; // prevent flipping under ground
-
-// Save initial camera state for reset
-let savedTarget   = new THREE.Vector3();
-let savedPosition = new THREE.Vector3();
-let savedNear = 1, savedFar = 1e7;
-let hasSavedView  = false;
-
-function saveView() {
-  savedTarget.copy(controls.target);
-  savedPosition.copy(camera.position);
-  savedNear = camera.near;
-  savedFar  = camera.far;
-  hasSavedView = true;
-}
-
-function resetView() {
-  if (!hasSavedView) return;
-  controls.target.copy(savedTarget);
-  camera.position.copy(savedPosition);
-  camera.near = savedNear;
-  camera.far  = savedFar;
-  camera.updateProjectionMatrix();
-  controls.update();
-}
 
 // Lighting
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
@@ -395,10 +360,104 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// ── Spectator camera ─────────────────────────────────────────────────────────
+let yaw   = 0;   // horizontal look (radians)
+let pitch = 0;   // vertical look (radians)
+
+// Initialise yaw/pitch from default camera orientation
+camera.rotation.order = 'YXZ';
+yaw   = camera.rotation.y;
+pitch = camera.rotation.x;
+
+function applyLook() {
+  camera.rotation.set(pitch, yaw, 0, 'YXZ');
+}
+applyLook();
+
+// Mouse look — pointer lock so cursor never escapes the window
+canvas.addEventListener('click', () => canvas.requestPointerLock());
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+document.addEventListener('pointerlockchange', () => {
+  canvas.style.cursor = document.pointerLockElement === canvas ? 'none' : '';
+});
+
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== canvas) return;
+  const sens = 0.002;
+  yaw   -= e.movementX * sens;
+  pitch -= e.movementY * sens;
+  pitch  = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+  applyLook();
+});
+
+// Scroll to adjust speed multiplier
+let speedMult = 1.0;
+canvas.addEventListener('wheel', e => {
+  speedMult *= e.deltaY > 0 ? 0.85 : 1.15;
+  speedMult  = Math.max(0.05, Math.min(20, speedMult));
+  e.preventDefault();
+}, { passive: false });
+
+// Save / reset view
+let savedPos   = camera.position.clone();
+let savedYaw   = yaw;
+let savedPitch = pitch;
+let savedNear  = 1, savedFar = 1e7;
+let hasSavedView = false;
+
+function saveView() {
+  savedPos.copy(camera.position);
+  savedYaw = yaw; savedPitch = pitch;
+  savedNear = camera.near; savedFar = camera.far;
+  hasSavedView = true;
+}
+function resetView() {
+  if (!hasSavedView) return;
+  camera.position.copy(savedPos);
+  yaw = savedYaw; pitch = savedPitch;
+  camera.near = savedNear; camera.far = savedFar;
+  camera.updateProjectionMatrix();
+  applyLook();
+}
+
+// WASD keys
+const keys = {};
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  keys[e.code] = true;
+  if (e.code === 'KeyF' || e.code === 'Home') resetView();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+const _fwd  = new THREE.Vector3();
+const _right= new THREE.Vector3();
+const _worldUp = new THREE.Vector3(0, 1, 0);
+
+function tickFly(dt) {
+  const base  = 1200 * speedMult;
+  const speed = (keys['ShiftLeft'] || keys['ShiftRight']) ? base * 4 : base;
+  const d     = speed * dt;
+
+  camera.getWorldDirection(_fwd);
+  _right.crossVectors(_fwd, _worldUp).normalize();
+
+  if (keys['KeyW'] || keys['ArrowUp'])     camera.position.addScaledVector(_fwd,    d);
+  if (keys['KeyS'] || keys['ArrowDown'])   camera.position.addScaledVector(_fwd,   -d);
+  if (keys['KeyA'] || keys['ArrowLeft'])   camera.position.addScaledVector(_right, -d);
+  if (keys['KeyD'] || keys['ArrowRight'])  camera.position.addScaledVector(_right,  d);
+  if (keys['KeyE'] || keys['Space'])       camera.position.y += d;
+  if (keys['KeyQ'] || keys['ControlLeft']) camera.position.y -= d;
+}
+
 // Render loop
+let _lastT = performance.now();
 (function loop() {
   requestAnimationFrame(loop);
-  controls.update();
+  const now = performance.now();
+  const dt  = Math.min((now - _lastT) / 1000, 0.1);
+  _lastT = now;
+  tickFly(dt);
   renderer.render(scene, camera);
 })();
 
@@ -427,7 +486,7 @@ function buildScene(data) {
     geo.setIndex(grp.indices);
     geo.computeVertexNormals();
 
-    const mat  = new THREE.MeshStandardMaterial({ color, roughness: .8, metalness: .1, side: THREE.DoubleSide });
+    const mat  = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.userData.groupIdx = i;
     mesh.userData.color    = color;
@@ -435,9 +494,9 @@ function buildScene(data) {
     groupMeshes.push(mesh);
     box.expandByObject(mesh);
 
-    // Wireframe overlay
-    const wmat  = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true, transparent: true, opacity: .25 });
-    const wire  = new THREE.Mesh(geo, wmat);
+    // Wireframe overlay — LineSegments is cheaper than a second full mesh
+    const wgeo = new THREE.WireframeGeometry(geo);
+    const wire = new THREE.LineSegments(wgeo, new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: .3 }));
     wire.visible = false;
     scene.add(wire);
     groupWires.push(wire);
@@ -447,12 +506,15 @@ function buildScene(data) {
   if (!box.isEmpty()) {
     const center = box.getCenter(new THREE.Vector3());
     const size   = box.getSize(new THREE.Vector3()).length();
-    controls.target.copy(center);
     camera.position.copy(center).add(new THREE.Vector3(0, size * .4, size * .8));
     camera.near = size / 1000;
     camera.far  = size * 10;
     camera.updateProjectionMatrix();
-    controls.update();
+    // Look toward center
+    const dir = new THREE.Vector3().subVectors(center, camera.position).normalize();
+    yaw   = Math.atan2(dir.x, dir.z);
+    pitch = -Math.asin(Math.max(-1, Math.min(1, dir.y)));
+    applyLook();
     saveView();
   }
 
@@ -528,6 +590,8 @@ window.addEventListener('keydown', e => {
 // ── Texture loading ───────────────────────────────────────────────────────────
 const texLoader = new THREE.TextureLoader();
 const loadedTextures = {};  // leaf name (lowercase) → THREE.Texture
+const loadedFiles    = {};  // leaf name (lowercase) → File
+const loadedSizes    = {};  // leaf name (lowercase) → {w, h}
 
 document.getElementById('btn-tex').addEventListener('click', () => {
   document.getElementById('tex-input').click();
@@ -549,6 +613,8 @@ document.getElementById('tex-input').addEventListener('change', e => {
       tex.minFilter     = THREE.LinearFilter;
       tex.needsUpdate = true;
       loadedTextures[leaf] = tex;
+      loadedFiles[leaf]    = file;
+      loadedSizes[leaf]    = { w: img.image.width, h: img.image.height };
       loaded++;
       applyTextures();
       if (loaded === files.length)
@@ -589,33 +655,48 @@ function updateStats(data) {
 document.getElementById('btn-export').addEventListener('click', () => {
   if (!lastData) return;
   const groups = selectedIdx >= 0 ? [lastData.groups[selectedIdx]] : lastData.groups;
-  groups.forEach(grp => {
-    const lines = [`# ${grp.name}`, `o ${grp.name}`, ''];
-    const verts   = grp.verts;
-    const normals = grp.normals;
-    const uvs     = grp.uvs;
-    const idx     = grp.indices;
-
-    for (let i = 0; i < verts.length; i += 3)
-      lines.push(`v ${verts[i].toFixed(4)} ${verts[i+1].toFixed(4)} ${verts[i+2].toFixed(4)}`);
-    lines.push('');
-    for (let i = 0; i < uvs.length; i += 2)
-      lines.push(`vt ${uvs[i].toFixed(6)} ${uvs[i+1].toFixed(6)}`);
-    lines.push('');
-    for (let i = 0; i < normals.length; i += 3)
-      lines.push(`vn ${normals[i].toFixed(6)} ${normals[i+1].toFixed(6)} ${normals[i+2].toFixed(6)}`);
-    lines.push('');
-    lines.push('usemtl displacement');
-    for (let i = 0; i < idx.length; i += 3) {
-      const a = idx[i]+1, b = idx[i+1]+1, c = idx[i+2]+1;
-      lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`);
-    }
-
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const dl = (blob, filename) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${grp.name}.obj`;
-    a.click();
+    a.download = filename; a.click();
+  };
+
+  groups.forEach(grp => {
+    const leaf    = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop() : 'displacement';
+    const matName = leaf;
+    const texFile = loadedFiles[leaf.toLowerCase()];
+    const texName = texFile ? texFile.name : `${leaf}.bmp`;
+
+    // MTL
+    const mtl = [
+      `newmtl ${matName}`,
+      `Ka 1.000 1.000 1.000`,
+      `Kd 1.000 1.000 1.000`,
+      `Ks 0.000 0.000 0.000`,
+      `map_Kd ${texName}`,
+      ``
+    ].join('\n');
+    dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
+
+    // OBJ
+    const lines = [`mtllib ${grp.name}.mtl`, `o ${grp.name}`, ''];
+    const { verts, normals, uvs, indices: idx } = grp;
+    for (let i = 0; i < verts.length;   i += 3) lines.push(`v ${verts[i].toFixed(4)} ${verts[i+1].toFixed(4)} ${verts[i+2].toFixed(4)}`);
+    lines.push('');
+    const sz = loadedSizes[leaf.toLowerCase()];
+    for (let i = 0; i < uvs.length; i += 2) {
+      const u =  sz ? uvs[i]   / sz.w : uvs[i];
+      const v =  sz ? 1 - (uvs[i+1] / sz.h) : uvs[i+1];  // flip V: Source top-left → OBJ bottom-left
+      lines.push(`vt ${u.toFixed(6)} ${v.toFixed(6)}`);
+    }
+    lines.push('');
+    for (let i = 0; i < normals.length; i += 3) lines.push(`vn ${normals[i].toFixed(6)} ${normals[i+1].toFixed(6)} ${normals[i+2].toFixed(6)}`);
+    lines.push('', `usemtl ${matName}`);
+    for (let i = 0; i < idx.length; i += 3) { const a=idx[i]+1,b=idx[i+1]+1,c=idx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
+    dl(new Blob([lines.join('\n')], {type:'text/plain'}), `${grp.name}.obj`);
+
+    // Texture file (if loaded)
+    if (texFile) dl(texFile, texName);
   });
 });
 
