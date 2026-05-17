@@ -290,16 +290,111 @@ def _intersect3(n1, d1, n2, d2, n3, d3) -> Optional[Vec3]:
     c12 = vcross(n1, n2)
     return vscale(vadd(vadd(vscale(c23, d1), vscale(c31, d2)), vscale(c12, d3)), 1.0 / det)
 
+def _dedupe_points(points: List[Vec3], eps: float = 1e-4) -> List[Vec3]:
+    """Collapse nearly-identical points while preserving first-seen order."""
+    out: List[Vec3] = []
+    for p in points:
+        if all(vlen(vsub(p, q)) > eps for q in out):
+            out.append(p)
+    return out
+
+
+def _order_face_points(points: List[Vec3],
+                       face_n: Vec3,
+                       winding_ref: Optional[List[Vec3]] = None) -> List[Vec3]:
+    """Return face vertices in a stable winding around their centroid."""
+    center = (
+        sum(p[0] for p in points) / len(points),
+        sum(p[1] for p in points) / len(points),
+        sum(p[2] for p in points) / len(points),
+    )
+
+    axis_u = vsub(points[0], center)
+    if vlen(axis_u) < 1e-9:
+        axis_u = (1., 0., 0.)
+    axis_u = vnorm(axis_u)
+    axis_v = vnorm(vcross(face_n, axis_u))
+
+    ordered = sorted(
+        points,
+        key=lambda p: math.atan2(vdot(vsub(p, center), axis_v),
+                                 vdot(vsub(p, center), axis_u))
+    )
+
+    # Match the VMF plane winding as closely as possible.  The first three plane
+    # points are real face corners, so their signed area is the authoritative
+    # local orientation for this side.
+    ref_pts = winding_ref if winding_ref and len(winding_ref) >= 3 else points
+    ref = vdot(vcross(vsub(ref_pts[1], ref_pts[0]), vsub(ref_pts[2], ref_pts[1])), face_n)
+    cur = vdot(vcross(vsub(ordered[1], ordered[0]), vsub(ordered[2], ordered[1])), face_n)
+    if ref * cur < 0:
+        ordered.reverse()
+    return ordered
+
+
+def _brush_face_vertices(plane_pts: List[Vec3],
+                         sibling_planes: List[List[Vec3]]) -> Optional[List[Vec3]]:
+    """
+    Reconstruct this side's full polygon by intersecting the parent brush planes.
+
+    VMF side planes define a convex brush.  Instead of guessing a missing corner
+    from arbitrary sibling-plane pairs, derive all brush vertices and keep the
+    ones that lie on this face.  This also makes adjacent displacements recover
+    shared brush corners from the same plane set.
+    """
+    planes = []
+    for pts in sibling_planes:
+        if len(pts) >= 3:
+            planes.append(_plane_nd(pts))
+    if len(planes) < 4:
+        return None
+
+    face_n, face_d = _plane_nd(plane_pts)
+    face_idx = None
+    for idx, (n, d) in enumerate(planes):
+        if abs(vdot(n, face_n) - 1.0) < 1e-6 and abs(d - face_d) < 1e-4:
+            face_idx = idx
+            break
+    if face_idx is None:
+        planes.append((face_n, face_d))
+        face_idx = len(planes) - 1
+
+    def collect(sign: float) -> List[Vec3]:
+        verts: List[Vec3] = []
+        for i in range(len(planes)):
+            for j in range(i + 1, len(planes)):
+                for k in range(j + 1, len(planes)):
+                    p = _intersect3(planes[i][0], planes[i][1],
+                                    planes[j][0], planes[j][1],
+                                    planes[k][0], planes[k][1])
+                    if p is None:
+                        continue
+                    if all(sign * (vdot(n, p) - d) <= 1e-3 for n, d in planes):
+                        verts.append(p)
+        face_verts = [
+            p for p in _dedupe_points(verts)
+            if abs(vdot(face_n, p) - face_d) <= 1e-3
+        ]
+        return face_verts
+
+    face_verts = collect(1.0)
+    if len(face_verts) < 3:
+        face_verts = collect(-1.0)
+    if len(face_verts) < 3:
+        return None
+
+    return _order_face_points(face_verts, face_n, plane_pts)
+
+
 def recover_corners(plane_pts: List[Vec3],
                     sibling_planes: List[List[Vec3]],
                     start_pos: Vec3) -> Tuple[Vec3, Vec3, Vec3, Vec3]:
     """
     Recover the 4 grid corners from the VMF plane points.
 
-    p0, p1, p2  are 3 of the 4 actual face corners stored in the VMF plane
-    (CW order viewed from outside the brush).  The 4th corner is found by
-    intersecting the two sibling brush planes that share edges with p0 and p2
-    respectively.  If that fails we fall back to the parallelogram formula.
+    p0, p1, p2 are 3 actual face corners stored in the VMF plane.  Prefer
+    reconstructing the whole face from the parent brush's convex plane set; only
+    fall back to a parallelogram when brush reconstruction is unavailable.
 
     After recovering all 4 corners we rotate them so the one nearest
     startposition comes first (CW), giving:
@@ -309,91 +404,38 @@ def recover_corners(plane_pts: List[Vec3],
         corners[3] = c_col   (third CW step from start)
     """
     p0, p1, p2 = plane_pts[0], plane_pts[1], plane_pts[2]
-
-    # --- Find the true 4th corner via sibling planes -------------------------
     face_n, face_d = _plane_nd([p0, p1, p2])
-    THRESH = 1.0   # Source units; plane points are exact integers typically
-
-    def on_sib(pt, sn, sd) -> bool:
-        return abs(vdot(sn, pt) - sd) < THRESH
-
-    # Helper: True if pts form a convex polygon wound CW (face_n is outward normal).
-    def _try_order(pts):
-        n = len(pts)
-        for k in range(n):
-            a, b, c = pts[k], pts[(k+1) % n], pts[(k+2) % n]
-            if vdot(vcross(vsub(b, a), vsub(c, a)), face_n) < -1e-6:
-                return False
-        return True
-
-    # Collect non-parallel sibling planes.
-    non_par = []
-    for sib in sibling_planes:
-        if len(sib) < 3:
-            continue
-        sn, sd = _plane_nd(sib)
-        if 1.0 - abs(vdot(face_n, sn)) < 1e-6:
-            continue   # parallel to face (face itself or back face)
-        non_par.append((sn, sd))
-
-    # Try every pair of sibling planes.  Each pair's 3-plane intersection with
-    # the face plane gives a candidate vertex.  We keep the candidate that:
-    #   (a) is not one of the 3 known corners, and
-    #   (b) produces a valid convex quad with p0, p1, p2.
-    # Among convex-quad-forming candidates, prefer the one closest to the
-    # parallelogram prediction (exact for rectangular brushes, good reference).
-    para_pred = vadd(p0, vsub(p2, p1))   # parallelogram reference
-
-    convex_cands: List[Vec3] = []
-    other_cands:  List[Vec3] = []
-
-    for i in range(len(non_par)):
-        for j in range(i + 1, len(non_par)):
-            cand = _intersect3(face_n, face_d,
-                               non_par[i][0], non_par[i][1],
-                               non_par[j][0], non_par[j][1])
-            if cand is None:
-                continue
-            # Skip if it coincides with a known corner
-            if min(vlen(vsub(cand, pt)) for pt in [p0, p1, p2]) < THRESH:
-                continue
-            # Check whether this candidate forms a valid convex quad
-            makes_convex = any(
-                _try_order([p0, p1, p2][:pos] + [cand] + [p0, p1, p2][pos:])
-                for pos in range(4)
-            )
-            if makes_convex:
-                convex_cands.append(cand)
-            else:
-                other_cands.append(cand)
-
-    # Pick from convex candidates first (closest to parallelogram reference),
-    # then fall back to non-convex candidates, then parallelogram itself.
-    def _score(c): return vlen(vsub(c, para_pred))
-
-    if convex_cands:
-        p3 = min(convex_cands, key=_score)
-    elif other_cands:
-        p3 = min(other_cands, key=_score)
-    else:
-        # Fallback: parallelogram assumption (exact for rectangular brushes)
-        p3 = para_pred
-
-    # Sort all 4 corners into the correct CW order (viewed from outside).
-    corners: Optional[List[Vec3]] = None
-    for pos in range(4):
-        cand = [p0, p1, p2]
-        cand.insert(pos, p3)
-        if _try_order(cand):
-            corners = cand
-            break
+    corners = _brush_face_vertices(plane_pts, sibling_planes)
     if corners is None:
-        corners = [p0, p1, p2, p3]   # shouldn't happen for valid geometry
+        p3 = vadd(p0, vsub(p2, p1))
+        corners = _order_face_points([p0, p1, p2, p3], face_n, plane_pts)
+    elif len(corners) != 4:
+        # Source displacements are quadrilateral.  If the brush face has extra
+        # clipped vertices, keep the four corners nearest to the displacement's
+        # authored plane points and the opposite parallelogram prediction.
+        refs = [p0, p1, p2, vadd(p0, vsub(p2, p1))]
+        picked: List[Vec3] = []
+        for ref in refs:
+            p = min(corners, key=lambda c: vlen(vsub(c, ref)))
+            if all(vlen(vsub(p, q)) > 1e-4 for q in picked):
+                picked.append(p)
+        if len(picked) == 4:
+            corners = _order_face_points(picked, face_n, plane_pts)
+        else:
+            raise ValueError(f"displacement side is not a quad ({len(corners)} face vertices)")
 
     # Rotate so the corner nearest startposition comes first, preserving CW order
     dists = [vlen(vsub(c, start_pos)) for c in corners]
     si = dists.index(min(dists))
     corners = corners[si:] + corners[:si]
+
+    # The triangle builder expects cross(row_axis, col_axis) to face the source
+    # side normal.  If the recovered winding is opposite, flip the two adjacent
+    # corners so dispinfo rows/columns are not transposed by winding alone.
+    row_axis = vsub(corners[1], corners[0])
+    col_axis = vsub(corners[3], corners[0])
+    if vdot(vcross(row_axis, col_axis), face_n) < 0:
+        corners = [corners[0], corners[3], corners[2], corners[1]]
 
     # corners[0]=c_start, corners[1]=c_row, corners[2]=c_diag, corners[3]=c_col
     return corners[0], corners[1], corners[2], corners[3]
