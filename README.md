@@ -11,13 +11,19 @@ Extracts displacement surfaces from Source Engine VMF files and exports them for
 
 ## Requirements
 
-- Python 3.7+
-- Flask (`pip install flask`) — only needed for the web viewer
+- Python 3.14+
+- [uv](https://docs.astral.sh/uv/) for dependency installation from `pyproject.toml` / `uv.lock`
+
+Install dependencies:
+
+```
+uv sync
+```
 
 ## Web Viewer
 
 ```
-py -3 app.py
+uv run python app.py
 ```
 
 Opens at `http://127.0.0.1:5000` automatically.
@@ -34,7 +40,7 @@ Controls: scroll to zoom, left-drag to orbit, right-drag to pan.
 ## CLI — VMF → OBJ
 
 ```
-py -3 vmf_disp_to_obj.py yourmap.vmf
+uv run python vmf_disp_to_obj.py yourmap.vmf
 ```
 
 Options:
@@ -44,6 +50,7 @@ Options:
 --no-merge            One OBJ per tile instead of grouping by proximity
 --proximity FLOAT     Grouping threshold in Source units (default: 4.0)
 --weld FLOAT          Vertex weld tolerance in Source units (default: 1.0)
+--stitch FLOAT        Bridge close unmatched boundary edges (default: 128.0, 0 disables)
 -v, --verbose         Print per-tile debug info
 ```
 
