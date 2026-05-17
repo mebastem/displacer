@@ -661,13 +661,19 @@ document.getElementById('btn-export').addEventListener('click', () => {
     a.download = filename; a.click();
   };
 
+  const GOLDSRC_MESH_VERTS  = 2048;
+  const GOLDSRC_MODEL_VERTS = 32000;
+
+  let totalVertsExported = 0;
+
   groups.forEach(grp => {
     const leaf    = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop() : 'displacement';
     const matName = leaf;
     const texFile = loadedFiles[leaf.toLowerCase()];
     const texName = texFile ? texFile.name : `${leaf}.bmp`;
+    const sz      = loadedSizes[leaf.toLowerCase()];
 
-    // MTL
+    // MTL (one per group, shared by all chunks)
     const mtl = [
       `newmtl ${matName}`,
       `Ka 1.000 1.000 1.000`,
@@ -678,26 +684,60 @@ document.getElementById('btn-export').addEventListener('click', () => {
     ].join('\n');
     dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
 
-    // OBJ
-    const lines = [`mtllib ${grp.name}.mtl`, `o ${grp.name}`, ''];
+    // Split indices into chunks of GOLDSRC_MESH_VERTS verts each.
+    // Each triangle references 3 verts; we remap to a local index per chunk.
     const { verts, normals, uvs, indices: idx } = grp;
-    for (let i = 0; i < verts.length;   i += 3) lines.push(`v ${verts[i].toFixed(4)} ${verts[i+1].toFixed(4)} ${verts[i+2].toFixed(4)}`);
-    lines.push('');
-    const sz = loadedSizes[leaf.toLowerCase()];
-    for (let i = 0; i < uvs.length; i += 2) {
-      const u =  sz ? uvs[i]   / sz.w : uvs[i];
-      const v =  sz ? 1 - (uvs[i+1] / sz.h) : uvs[i+1];  // flip V: Source top-left → OBJ bottom-left
-      lines.push(`vt ${u.toFixed(6)} ${v.toFixed(6)}`);
+
+    const chunks = [];   // [{localVerts, localNormals, localUVs, localIdx}]
+    let cur = null;
+    const vertMap = new Map(); // global vert idx → local idx in cur chunk
+
+    for (let t = 0; t < idx.length; t += 3) {
+      // Check if all 3 verts of this triangle fit in current chunk
+      const tri = [idx[t], idx[t+1], idx[t+2]];
+      const newVerts = tri.filter(v => !vertMap.has(v));
+      if (!cur || cur.localVerts.length / 3 + newVerts.length > GOLDSRC_MESH_VERTS) {
+        cur = { localVerts: [], localNormals: [], localUVs: [], localIdx: [] };
+        chunks.push(cur);
+        vertMap.clear();
+      }
+      const face = tri.map(gv => {
+        if (!vertMap.has(gv)) {
+          const li = cur.localVerts.length / 3;
+          vertMap.set(gv, li);
+          cur.localVerts.push(verts[gv*3], verts[gv*3+1], verts[gv*3+2]);
+          cur.localNormals.push(normals[gv*3], normals[gv*3+1], normals[gv*3+2]);
+          const u = sz ? uvs[gv*2]   / sz.w : uvs[gv*2];
+          const v = sz ? 1 - (uvs[gv*2+1] / sz.h) : uvs[gv*2+1];
+          cur.localUVs.push(u, v);
+        }
+        return vertMap.get(gv);
+      });
+      cur.localIdx.push(...face);
     }
-    lines.push('');
-    for (let i = 0; i < normals.length; i += 3) lines.push(`vn ${normals[i].toFixed(6)} ${normals[i+1].toFixed(6)} ${normals[i+2].toFixed(6)}`);
-    lines.push('', `usemtl ${matName}`);
-    for (let i = 0; i < idx.length; i += 3) { const a=idx[i]+1,b=idx[i+1]+1,c=idx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
-    dl(new Blob([lines.join('\n')], {type:'text/plain'}), `${grp.name}.obj`);
+
+    // Write one OBJ per chunk
+    chunks.forEach((chunk, ci) => {
+      totalVertsExported += chunk.localVerts.length / 3;
+      const suffix = chunks.length > 1 ? `_part${ci+1}` : '';
+      const name   = `${grp.name}${suffix}`;
+      const lines  = [`mtllib ${grp.name}.mtl`, `o ${name}`, ''];
+      for (let i = 0; i < chunk.localVerts.length;   i += 3) lines.push(`v ${chunk.localVerts[i].toFixed(4)} ${chunk.localVerts[i+1].toFixed(4)} ${chunk.localVerts[i+2].toFixed(4)}`);
+      lines.push('');
+      for (let i = 0; i < chunk.localUVs.length;     i += 2) lines.push(`vt ${chunk.localUVs[i].toFixed(6)} ${chunk.localUVs[i+1].toFixed(6)}`);
+      lines.push('');
+      for (let i = 0; i < chunk.localNormals.length; i += 3) lines.push(`vn ${chunk.localNormals[i].toFixed(6)} ${chunk.localNormals[i+1].toFixed(6)} ${chunk.localNormals[i+2].toFixed(6)}`);
+      lines.push('', `usemtl ${matName}`);
+      for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
+      dl(new Blob([lines.join('\n')], {type:'text/plain'}), `${name}.obj`);
+    });
 
     // Texture file (if loaded)
     if (texFile) dl(texFile, texName);
   });
+
+  if (totalVertsExported > GOLDSRC_MODEL_VERTS)
+    alert(`Warning: total exported verts (${totalVertsExported.toLocaleString()}) exceeds GoldSrc model limit of ${GOLDSRC_MODEL_VERTS.toLocaleString()}. You may need to split this into multiple models.`);
 });
 
 // ── Upload / process ──────────────────────────────────────────────────────────
