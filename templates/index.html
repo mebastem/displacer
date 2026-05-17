@@ -758,6 +758,9 @@ async function processFile(file) {
       alert('Error: ' + data.error);
       return;
     }
+    if (data.warnings && data.warnings.length) {
+      console.warn('Some displacement surfaces could not be converted:', data.warnings);
+    }
 
     lastData = data;
     document.getElementById('drop-zone').classList.add('hidden');

@@ -39,11 +39,22 @@ def process():
         return jsonify({'error': 'No displacement surfaces found in this VMF.'}), 400
 
     meshes = []
+    warnings = []
     for ds in sides:
         try:
             meshes.append(build_mesh(ds))
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.append({
+                'solid_id': ds.solid_id,
+                'side_id': ds.side_id,
+                'error': str(e),
+            })
+
+    if not meshes:
+        return jsonify({
+            'error': 'Displacement surfaces were found, but none could be converted.',
+            'warnings': warnings,
+        }), 400
 
     groups = group_meshes(meshes, proximity=4.0)
 
@@ -82,6 +93,8 @@ def process():
     return jsonify({
         'filename':    f.filename,
         'total_disps': len(sides),
+        'converted_disps': len(meshes),
+        'warnings':    warnings,
         'groups':      out_groups,
     })
 

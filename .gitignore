@@ -1,3 +1,6 @@
+.idea
+.codex
+
 # Generated output
 disp_obj/
 disp_models/
@@ -13,3 +16,5 @@ __pycache__/
 
 # Screenshots / scratch files
 *.png
+
+files
