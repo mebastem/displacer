@@ -47,13 +47,115 @@
     background: #1e1e2a;
     color: #aaa;
     border: 1px solid #333;
-    border-radius: 6px;
+    border-radius: 6px 0 0 6px;
+    border-right: none;
     font-size: 13px;
     cursor: pointer;
     transition: all .15s;
   }
   #btn-export:hover:not(:disabled) { background: #25253a; color: #fff; }
   #btn-export:disabled { opacity: .4; cursor: default; }
+
+  #btn-export-settings {
+    padding: 7px 10px;
+    background: #1e1e2a;
+    color: #666;
+    border: 1px solid #333;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+    line-height: 1;
+  }
+  #btn-export-settings:hover:not(:disabled) { background: #25253a; color: #aaa; }
+  #btn-export-settings:disabled { opacity: .4; cursor: default; }
+  #btn-export-settings.open { background: #2a2a3a; color: #4a6cf7; border-color: #4a6cf7; }
+
+  /* ── Export Settings modal ───────────────────────────────── */
+  #export-settings-modal {
+    display: none;
+    position: absolute;
+    top: 48px;
+    right: 0;
+    width: 320px;
+    background: #18181f;
+    border: 1px solid #2a2a38;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    z-index: 100;
+    padding: 0;
+    overflow: hidden;
+  }
+  #export-settings-modal.open { display: block; }
+
+  .esm-header {
+    padding: 12px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #555;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .esm-header span { color: #4a6cf7; }
+
+  .esm-section {
+    padding: 12px 16px;
+    border-bottom: 1px solid #1a1a24;
+  }
+  .esm-section:last-child { border-bottom: none; }
+
+  .esm-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #555;
+    margin-bottom: 8px;
+  }
+
+  .esm-radio-group { display: flex; flex-direction: column; gap: 5px; }
+  .esm-radio {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #aaa;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    transition: background .1s;
+  }
+  .esm-radio:hover { background: #1e1e2a; color: #fff; }
+  .esm-radio input[type=radio] { accent-color: #4a6cf7; cursor: pointer; }
+  .esm-radio.selected { color: #fff; }
+  .esm-radio small { color: #444; font-size: 10px; margin-left: auto; }
+
+  .esm-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #aaa;
+    padding: 4px 0;
+  }
+  .esm-row input[type=checkbox] { accent-color: #4a6cf7; cursor: pointer; }
+  .esm-row input[type=number] {
+    width: 72px;
+    background: #111118;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 12px;
+    padding: 3px 6px;
+    text-align: right;
+  }
+  .esm-row input[type=number]:focus { outline: none; border-color: #4a6cf7; }
+  .esm-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .esm-row.disabled { opacity: .35; pointer-events: none; }
 
   #btn-reset {
     padding: 7px 14px;
@@ -303,7 +405,58 @@
   <button id="btn-reset">Reset View</button>
   <button id="btn-tex">Load Textures</button>
   <button id="btn-pick" disabled>Tile Picker</button>
-  <button id="btn-export" disabled>Export OBJ</button>
+  <div style="position:relative;display:flex">
+    <button id="btn-export" disabled>Export OBJ</button>
+    <button id="btn-export-settings" disabled title="Export settings">&#9881;</button>
+    <div id="export-settings-modal">
+      <div class="esm-header">Export Settings <span id="esm-scope-tag">all groups</span></div>
+
+      <div class="esm-section">
+        <div class="esm-label">Scope</div>
+        <div class="esm-radio-group">
+          <label class="esm-radio"><input type="radio" name="esm-scope" value="visible" checked> All visible groups <small>default</small></label>
+          <label class="esm-radio"><input type="radio" name="esm-scope" value="selected"> Selected group only</label>
+          <label class="esm-radio"><input type="radio" name="esm-scope" value="single"> Single merged OBJ <small>all as one mesh</small></label>
+        </div>
+      </div>
+
+      <div class="esm-section">
+        <div class="esm-label">GoldSrc Limits</div>
+        <div class="esm-row">
+          <label><input type="checkbox" id="esm-split" checked> Split meshes at vert limit</label>
+        </div>
+        <div class="esm-row" id="esm-split-row">
+          <span>Max verts per mesh</span>
+          <input type="number" id="esm-split-verts" value="2048" min="64" max="65536" step="64">
+        </div>
+        <div class="esm-row">
+          <span>Warn if total exceeds</span>
+          <input type="number" id="esm-warn-verts" value="32000" min="1000" max="200000" step="1000">
+        </div>
+      </div>
+
+      <div class="esm-section">
+        <div class="esm-label">Geometry</div>
+        <div class="esm-row">
+          <span>Unit scale</span>
+          <input type="number" id="esm-scale" value="1.0" min="0.01" max="100" step="0.1">
+        </div>
+        <div class="esm-row">
+          <label><input type="checkbox" id="esm-normals" checked> Export vertex normals (vn)</label>
+        </div>
+      </div>
+
+      <div class="esm-section">
+        <div class="esm-label">Files</div>
+        <div class="esm-row">
+          <label><input type="checkbox" id="esm-tex" checked> Include texture files</label>
+        </div>
+        <div class="esm-row">
+          <label><input type="checkbox" id="esm-mtl" checked> Include .mtl file</label>
+        </div>
+      </div>
+    </div>
+  </div>
   <button id="btn-load">Load VMF</button>
   <input type="file" id="file-input" accept=".vmf" style="display:none">
   <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
@@ -689,52 +842,113 @@ function updateStats(data) {
     `Groups: <span>${data.groups.length}</span>`;
 }
 
+// ── Export Settings ───────────────────────────────────────────────────────────
+const btnExportSettings = document.getElementById('btn-export-settings');
+const exportModal       = document.getElementById('export-settings-modal');
+
+btnExportSettings.addEventListener('click', e => {
+  e.stopPropagation();
+  const open = exportModal.classList.toggle('open');
+  btnExportSettings.classList.toggle('open', open);
+});
+document.addEventListener('click', e => {
+  if (!exportModal.contains(e.target) && e.target !== btnExportSettings) {
+    exportModal.classList.remove('open');
+    btnExportSettings.classList.remove('open');
+  }
+});
+
+// Keep split-verts row enabled/disabled with the checkbox
+document.getElementById('esm-split').addEventListener('change', function () {
+  document.getElementById('esm-split-row').classList.toggle('disabled', !this.checked);
+});
+
+// Update scope tag in header
+document.querySelectorAll('input[name="esm-scope"]').forEach(r => {
+  r.addEventListener('change', () => {
+    const labels = { visible: 'all groups', selected: 'selected group', single: 'single file' };
+    document.getElementById('esm-scope-tag').textContent = labels[r.value] || '';
+  });
+});
+
+function getExportSettings() {
+  return {
+    scope:       document.querySelector('input[name="esm-scope"]:checked')?.value || 'visible',
+    splitMeshes: document.getElementById('esm-split').checked,
+    splitVerts:  parseInt(document.getElementById('esm-split-verts').value) || 2048,
+    warnVerts:   parseInt(document.getElementById('esm-warn-verts').value)  || 32000,
+    scale:       parseFloat(document.getElementById('esm-scale').value)     || 1.0,
+    exportNorms: document.getElementById('esm-normals').checked,
+    includeTex:  document.getElementById('esm-tex').checked,
+    includeMtl:  document.getElementById('esm-mtl').checked,
+  };
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
 document.getElementById('btn-export').addEventListener('click', () => {
   if (!lastData) return;
-  const groups = selectedIdx >= 0 ? [lastData.groups[selectedIdx]] : lastData.groups;
+  const s = getExportSettings();
+
+  // Resolve which groups to export
+  let groups;
+  if (s.scope === 'selected' && selectedIdx >= 0) {
+    groups = [lastData.groups[selectedIdx]];
+  } else if (s.scope === 'single') {
+    // Merge all groups into one virtual group for export
+    groups = ['__single__'];
+  } else {
+    groups = lastData.groups;
+  }
+
   const dl = (blob, filename) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename; a.click();
   };
 
-  const GOLDSRC_MESH_VERTS  = 2048;
-  const GOLDSRC_MODEL_VERTS = 32000;
+  // Build flat arrays for single-file mode by concatenating all groups
+  function buildSingleGroup() {
+    const allVerts = [], allNorms = [], allUVs = [], allIdx = [];
+    let offset = 0;
+    lastData.groups.forEach(grp => {
+      const n = grp.verts.length / 3;
+      allVerts.push(...grp.verts);
+      allNorms.push(...grp.normals);
+      allUVs.push(...grp.uvs);
+      grp.indices.forEach(i => allIdx.push(i + offset));
+      offset += n;
+    });
+    return { name: 'displacement', material: lastData.groups[0]?.material || '', verts: allVerts, normals: allNorms, uvs: allUVs, indices: allIdx };
+  }
+
+  const exportGroups = s.scope === 'single' ? [buildSingleGroup()] : groups;
 
   let totalVertsExported = 0;
 
-  groups.forEach(grp => {
+  exportGroups.forEach(grp => {
     const leaf    = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop() : 'displacement';
     const matName = leaf;
     const texFile = loadedFiles[leaf.toLowerCase()];
     const texName = texFile ? texFile.name : `${leaf}.bmp`;
     const sz      = loadedSizes[leaf.toLowerCase()];
 
-    // MTL (one per group, shared by all chunks)
-    const mtl = [
-      `newmtl ${matName}`,
-      `Ka 1.000 1.000 1.000`,
-      `Kd 1.000 1.000 1.000`,
-      `Ks 0.000 0.000 0.000`,
-      `map_Kd ${texName}`,
-      ``
-    ].join('\n');
-    dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
+    // MTL
+    if (s.includeMtl) {
+      const mtl = [`newmtl ${matName}`, `Ka 1.000 1.000 1.000`, `Kd 1.000 1.000 1.000`, `Ks 0.000 0.000 0.000`, `map_Kd ${texName}`, ``].join('\n');
+      dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
+    }
 
-    // Split indices into chunks of GOLDSRC_MESH_VERTS verts each.
-    // Each triangle references 3 verts; we remap to a local index per chunk.
     const { verts, normals, uvs, indices: idx } = grp;
+    const maxVerts = s.splitMeshes ? s.splitVerts : Infinity;
 
-    const chunks = [];   // [{localVerts, localNormals, localUVs, localIdx}]
+    const chunks = [];
     let cur = null;
-    const vertMap = new Map(); // global vert idx → local idx in cur chunk
+    const vertMap = new Map();
 
     for (let t = 0; t < idx.length; t += 3) {
-      // Check if all 3 verts of this triangle fit in current chunk
       const tri = [idx[t], idx[t+1], idx[t+2]];
       const newVerts = tri.filter(v => !vertMap.has(v));
-      if (!cur || cur.localVerts.length / 3 + newVerts.length > GOLDSRC_MESH_VERTS) {
+      if (!cur || cur.localVerts.length / 3 + newVerts.length > maxVerts) {
         cur = { localVerts: [], localNormals: [], localUVs: [], localIdx: [] };
         chunks.push(cur);
         vertMap.clear();
@@ -743,7 +957,8 @@ document.getElementById('btn-export').addEventListener('click', () => {
         if (!vertMap.has(gv)) {
           const li = cur.localVerts.length / 3;
           vertMap.set(gv, li);
-          cur.localVerts.push(verts[gv*3], verts[gv*3+1], verts[gv*3+2]);
+          const sc = s.scale;
+          cur.localVerts.push(verts[gv*3]*sc, verts[gv*3+1]*sc, verts[gv*3+2]*sc);
           cur.localNormals.push(normals[gv*3], normals[gv*3+1], normals[gv*3+2]);
           const u = sz ? uvs[gv*2]   / sz.w : uvs[gv*2];
           const v = sz ? 1 - (uvs[gv*2+1] / sz.h) : uvs[gv*2+1];
@@ -754,28 +969,35 @@ document.getElementById('btn-export').addEventListener('click', () => {
       cur.localIdx.push(...face);
     }
 
-    // Write one OBJ per chunk
     chunks.forEach((chunk, ci) => {
       totalVertsExported += chunk.localVerts.length / 3;
       const suffix = chunks.length > 1 ? `_part${ci+1}` : '';
       const name   = `${grp.name}${suffix}`;
-      const lines  = [`mtllib ${grp.name}.mtl`, `o ${name}`, ''];
+      const lines  = [];
+      if (s.includeMtl) lines.push(`mtllib ${grp.name}.mtl`);
+      lines.push(`o ${name}`, '');
       for (let i = 0; i < chunk.localVerts.length;   i += 3) lines.push(`v ${chunk.localVerts[i].toFixed(4)} ${chunk.localVerts[i+1].toFixed(4)} ${chunk.localVerts[i+2].toFixed(4)}`);
       lines.push('');
       for (let i = 0; i < chunk.localUVs.length;     i += 2) lines.push(`vt ${chunk.localUVs[i].toFixed(6)} ${chunk.localUVs[i+1].toFixed(6)}`);
+      if (s.exportNorms) {
+        lines.push('');
+        for (let i = 0; i < chunk.localNormals.length; i += 3) lines.push(`vn ${chunk.localNormals[i].toFixed(6)} ${chunk.localNormals[i+1].toFixed(6)} ${chunk.localNormals[i+2].toFixed(6)}`);
+      }
       lines.push('');
-      for (let i = 0; i < chunk.localNormals.length; i += 3) lines.push(`vn ${chunk.localNormals[i].toFixed(6)} ${chunk.localNormals[i+1].toFixed(6)} ${chunk.localNormals[i+2].toFixed(6)}`);
-      lines.push('', `usemtl ${matName}`);
-      for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
+      if (s.includeMtl) lines.push(`usemtl ${matName}`);
+      if (s.exportNorms) {
+        for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
+      } else {
+        for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a} ${b}/${b} ${c}/${c}`); }
+      }
       dl(new Blob([lines.join('\n')], {type:'text/plain'}), `${name}.obj`);
     });
 
-    // Texture file (if loaded)
-    if (texFile) dl(texFile, texName);
+    if (s.includeTex && texFile) dl(texFile, texName);
   });
 
-  if (totalVertsExported > GOLDSRC_MODEL_VERTS)
-    alert(`Warning: total exported verts (${totalVertsExported.toLocaleString()}) exceeds GoldSrc model limit of ${GOLDSRC_MODEL_VERTS.toLocaleString()}. You may need to split this into multiple models.`);
+  if (totalVertsExported > s.warnVerts)
+    alert(`Warning: total exported verts (${totalVertsExported.toLocaleString()}) exceeds limit of ${s.warnVerts.toLocaleString()}. You may need to split into multiple models.`);
 });
 
 // ── Tile Picker ───────────────────────────────────────────────────────────────
@@ -857,6 +1079,7 @@ async function processFile(file, debugTiles = false) {
     lastData = data;
     document.getElementById('drop-zone').classList.add('hidden');
     document.getElementById('btn-export').disabled = false;
+    document.getElementById('btn-export-settings').disabled = false;
     document.getElementById('btn-pick').disabled = false;
     buildScene(data);
     buildGroupList(data);
