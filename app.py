@@ -23,6 +23,7 @@ def process():
         return jsonify({'error': 'No file provided'}), 400
 
     f = request.files['vmf']
+
     try:
         content = f.read().decode('utf-8', errors='replace')
     except Exception as e:
@@ -39,10 +40,12 @@ def process():
         return jsonify({'error': 'No displacement surfaces found in this VMF.'}), 400
 
     meshes = []
+    side_ids = []  # parallel list: solid_id/side_id for each mesh
     warnings = []
     for ds in sides:
         try:
             meshes.append(build_mesh(ds))
+            side_ids.append((ds.solid_id, ds.side_id))
         except Exception as e:
             warnings.append({
                 'solid_id': ds.solid_id,
@@ -56,39 +59,56 @@ def process():
             'warnings': warnings,
         }), 400
 
-    groups = group_meshes(meshes, proximity=4.0)
+    def mesh_to_arrays(mesh):
+        verts = []
+        for x, y, z in mesh.verts:
+            verts += [x, z, -y]
+        norms = []
+        for nx, ny, nz in mesh.normals:
+            norms += [nx, nz, -ny]
+        uvs = []
+        for u, v in mesh.uvs:
+            uvs += [u, v]
+        indices = []
+        for a, b, c in mesh.tris:
+            indices += [a, b, c]
+        return verts, norms, uvs, indices
 
     out_groups = []
+
+    # group_meshes returns groups of meshes; track which side IDs are in each group
+    mesh_to_ids = {id(m): ids for m, ids in zip(meshes, side_ids)}
+    groups = group_meshes(meshes, proximity=4.0)
+
     for i, grp in enumerate(groups):
-        merged = merge_meshes(grp, weld=1.0)
+            # Build tile_map before merging so we know each tile's triangle range
+            tile_map = []
+            tri_offset = 0
+            for m in grp:
+                ids = mesh_to_ids[id(m)]
+                tile_map.append({
+                    'solid_id':  ids[0],
+                    'side_id':   ids[1],
+                    'material':  m.material,
+                    'tri_start': tri_offset,
+                    'tri_count': len(m.tris),
+                })
+                tri_offset += len(m.tris)
 
-        # Flatten into typed arrays for Three.js BufferGeometry.
-        # Convert Source (Z-up) → Three.js (Y-up): (x, y, z) → (x, z, -y)
-        verts = []
-        for x, y, z in merged.verts:
-            verts += [x, z, -y]
-
-        norms = []
-        for nx, ny, nz in merged.normals:
-            norms += [nx, nz, -ny]
-
-        uvs = []
-        for u, v in merged.uvs:
-            uvs += [u, v]
-
-        indices = []
-        for a, b, c in merged.tris:
-            indices += [a, b, c]
-
-        out_groups.append({
-            'name':     f'group_{i}',
-            'tiles':    len(grp),
-            'material': merged.material,
-            'verts':    verts,
-            'normals':  norms,
-            'uvs':      uvs,
-            'indices':  indices,
-        })
+            merged = merge_meshes(grp, weld=1.0)
+            grp_ids = [mesh_to_ids[id(m)] for m in grp]
+            verts, norms, uvs, indices = mesh_to_arrays(merged)
+            out_groups.append({
+                'name':      f'group_{i}',
+                'tiles':     len(grp),
+                'material':  merged.material,
+                'solid_ids': grp_ids,
+                'tile_map':  tile_map,
+                'verts':     verts,
+                'normals':   norms,
+                'uvs':       uvs,
+                'indices':   indices,
+            })
 
     return jsonify({
         'filename':    f.filename,

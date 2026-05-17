@@ -100,6 +100,37 @@
   #toggle-wire:hover { background: #25253a; color: #fff; }
   #toggle-wire.active { background: #2a3a5a; color: #7aadff; border-color: #4a6cf7; }
 
+  #btn-pick {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-pick:hover:not(:disabled) { background: #25253a; color: #fff; }
+  #btn-pick.active { background: #3a2a1a; color: #ffb347; border-color: #c87020; }
+  #btn-pick:disabled { opacity: .4; cursor: default; }
+
+  #pick-info {
+    position: absolute;
+    top: 12px; left: 12px;
+    background: rgba(10,10,20,.88);
+    border: 1px solid #c87020;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #ffb347;
+    pointer-events: none;
+    display: none;
+    max-width: 320px;
+    line-height: 1.6;
+    font-family: monospace;
+  }
+  #pick-info.visible { display: block; }
+
   /* ── Main layout ──────────────────────────────────────── */
   #main {
     display: flex;
@@ -271,6 +302,7 @@
   <button id="toggle-wire">Wireframe</button>
   <button id="btn-reset">Reset View</button>
   <button id="btn-tex">Load Textures</button>
+  <button id="btn-pick" disabled>Tile Picker</button>
   <button id="btn-export" disabled>Export OBJ</button>
   <button id="btn-load">Load VMF</button>
   <input type="file" id="file-input" accept=".vmf" style="display:none">
@@ -304,6 +336,7 @@
     </div>
 
     <canvas id="canvas"></canvas>
+    <div id="pick-info"></div>
     <div id="hud">Click to capture mouse &nbsp;·&nbsp; Esc to release &nbsp;·&nbsp; WASD: fly &nbsp;·&nbsp; E/Q: up/down &nbsp;·&nbsp; Shift: fast &nbsp;·&nbsp; Scroll: speed &nbsp;·&nbsp; F: reset view</div>
   </div>
 </div>
@@ -375,7 +408,7 @@ function applyLook() {
 applyLook();
 
 // Mouse look — pointer lock so cursor never escapes the window
-canvas.addEventListener('click', () => canvas.requestPointerLock());
+canvas.addEventListener('click', () => { if (!pickMode) canvas.requestPointerLock(); });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 document.addEventListener('pointerlockchange', () => {
@@ -467,6 +500,8 @@ let groupWires   = [];   // wireframe overlays
 let wireMode     = false;
 let lastData     = null; // raw JSON from server
 let selectedIdx  = -1;
+let pickMode     = false;
+let lastFile     = null; // cached File for re-processing
 
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
@@ -494,7 +529,6 @@ function buildScene(data) {
     groupMeshes.push(mesh);
     box.expandByObject(mesh);
 
-    // Wireframe overlay — LineSegments is cheaper than a second full mesh
     const wgeo = new THREE.WireframeGeometry(geo);
     const wire = new THREE.LineSegments(wgeo, new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: .3 }));
     wire.visible = false;
@@ -552,7 +586,11 @@ function buildGroupList(data) {
       </div>
       <span class="group-tiles">${grp.tiles} tile${grp.tiles !== 1 ? 's' : ''}</span>
     `;
-    item.addEventListener('click', () => selectGroup(i));
+    item.addEventListener('click', () => {
+      selectGroup(i);
+      const ids = grp.solid_ids ? grp.solid_ids.map(([s,sd]) => `solid ${s}`).join(', ') : '';
+      console.log(`Group ${i}: ${ids}`);
+    });
     list.appendChild(item);
   });
   document.getElementById('show-all').style.display = 'block';
@@ -740,18 +778,72 @@ document.getElementById('btn-export').addEventListener('click', () => {
     alert(`Warning: total exported verts (${totalVertsExported.toLocaleString()}) exceeds GoldSrc model limit of ${GOLDSRC_MODEL_VERTS.toLocaleString()}. You may need to split this into multiple models.`);
 });
 
+// ── Tile Picker ───────────────────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const pickInfo  = document.getElementById('pick-info');
+const btnPick   = document.getElementById('btn-pick');
+
+btnPick.addEventListener('click', () => {
+  pickMode = !pickMode;
+  btnPick.classList.toggle('active', pickMode);
+  if (pickMode) {
+    pickInfo.classList.add('visible');
+    pickInfo.textContent = 'Click a tile to identify it';
+    document.getElementById('hud').textContent =
+      'Tile Picker ON — click any tile to see its solid/side ID · ESC to release mouse · F: reset view';
+  } else {
+    pickInfo.classList.remove('visible');
+    document.getElementById('hud').textContent =
+      'Click to capture mouse · Esc to release · WASD: fly · E/Q: up/down · Shift: fast · Scroll: speed · F: reset view';
+  }
+});
+
+// Raycast on click when pick mode is on and pointer is NOT locked
+canvas.addEventListener('mousedown', e => {
+  if (!pickMode) return;
+  if (document.pointerLockElement === canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const ndc  = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width)  *  2 - 1,
+    ((e.clientY - rect.top)  / rect.height) * -2 + 1
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(groupMeshes, false);
+  if (!hits.length) { pickInfo.textContent = 'Missed — try clicking directly on a tile'; return; }
+
+  const hit      = hits[0];
+  const meshIdx  = groupMeshes.indexOf(hit.object);
+  if (meshIdx < 0 || !lastData) return;
+
+  const grp      = lastData.groups[meshIdx];
+  const faceIdx  = hit.faceIndex; // triangle index in merged mesh
+  const tileMap  = grp.tile_map || [];
+  const tile     = tileMap.find(t => faceIdx >= t.tri_start && faceIdx < t.tri_start + t.tri_count);
+
+  if (tile) {
+    const mat = tile.material ? tile.material.split(/[/\\]/).pop() : '?';
+    pickInfo.textContent = `solid_id: ${tile.solid_id}\nside_id:  ${tile.side_id}\nmaterial: ${mat}`;
+    console.log(`Picked tile — solid_id: ${tile.solid_id}, side_id: ${tile.side_id}, material: ${tile.material}, group: ${grp.name}`);
+  } else {
+    pickInfo.textContent = `group: ${grp.name}\nfaceIndex: ${faceIdx} (no tile_map)`;
+  }
+}, true);
+
 // ── Upload / process ──────────────────────────────────────────────────────────
-async function processFile(file) {
+async function processFile(file, debugTiles = false) {
   const loading = document.getElementById('loading');
   const loadingText = document.getElementById('loading-text');
   loading.classList.add('visible');
   loadingText.textContent = `Processing ${file.name}…`;
 
+  lastFile = file;
   const form = new FormData();
   form.append('vmf', file);
+  const url = debugTiles ? '/process?debug_tiles=1' : '/process';
 
   try {
-    const res  = await fetch('/process', { method: 'POST', body: form });
+    const res  = await fetch(url, { method: 'POST', body: form });
     const data = await res.json();
 
     if (data.error) {
@@ -765,6 +857,7 @@ async function processFile(file) {
     lastData = data;
     document.getElementById('drop-zone').classList.add('hidden');
     document.getElementById('btn-export').disabled = false;
+    document.getElementById('btn-pick').disabled = false;
     buildScene(data);
     buildGroupList(data);
     updateStats(data);

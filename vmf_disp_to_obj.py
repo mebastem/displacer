@@ -482,8 +482,12 @@ def build_mesh(ds: DispSide) -> Mesh:
             # Only apply displacement if normal is a valid direction.
             # VMF normals should be unit vectors; re-normalize defensively.
             if n_len > 1e-6:
-                n = vscale(n_raw, 1.0 / n_len)
-                pos = vadd(base, vadd(vscale(n, d), off))
+                # Do NOT renormalise here.  Regular VMF normals are already
+                # unit-length so it makes no difference.  Hammer-stitched edge
+                # vertices store the pre-computed world-space displacement as
+                # the "normal" with distance=1.0; renormalising destroys the
+                # magnitude and produces massive spikes at seam edges.
+                pos = vadd(base, vadd(vscale(n_raw, d), off))
             else:
                 pos = vadd(base, off)
             verts.append(pos)
