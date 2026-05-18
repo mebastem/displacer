@@ -57,6 +57,7 @@ class DispInfo:
     normals:   List[List[Vec3]]  = field(default_factory=list)
     distances: List[List[float]] = field(default_factory=list)
     offsets:   List[List[Vec3]]  = field(default_factory=list)
+    alphas:    List[List[float]] = field(default_factory=list)  # blend factor 0-255 per vertex
 
 
 @dataclass
@@ -87,6 +88,7 @@ class Mesh:
     uvs:      List[Tuple[float,float]]
     tris:     List[Tuple[int,int,int]]  # 0-based vertex indices
     material: str = 'NODRAW'
+    alphas:   List[float] = field(default_factory=list)  # per-vertex blend 0-1
 
     def bbox(self):
         xs = [v[0] for v in self.verts]
@@ -208,7 +210,8 @@ def read_dispinfo(raw: dict, power: int) -> DispInfo:
     return DispInfo(power=power, start_position=start,
                     normals=rows_vecs('normals', (0., 0., 1.)),
                     distances=rows_floats('distances'),
-                    offsets=rows_vecs('offsets', (0., 0., 0.)))
+                    offsets=rows_vecs('offsets', (0., 0., 0.)),
+                    alphas=rows_floats('alphas'))
 
 
 def extract_disp_sides(blocks: List[dict]) -> List[DispSide]:
@@ -465,8 +468,9 @@ def build_mesh(ds: DispSide) -> Mesh:
     c_start, c_row, c_diag, c_col = recover_corners(
         ds.plane_pts, ds.sibling_planes, di.start_position)
 
-    verts: List[Vec3]               = []
-    uvs:   List[Tuple[float,float]] = []
+    verts:  List[Vec3]               = []
+    uvs:    List[Tuple[float,float]] = []
+    alphas: List[float]              = []
 
     for row in range(size):
         t = row / (size - 1)
@@ -499,6 +503,11 @@ def build_mesh(ds: DispSide) -> Mesh:
                 uvs.append((u, v))
             else:
                 uvs.append((s, t))
+            # Blend alpha: 0 = basetexture, 1 = basetexture2
+            if di.alphas and row < len(di.alphas) and col < len(di.alphas[row]):
+                alphas.append(di.alphas[row][col] / 255.0)
+            else:
+                alphas.append(0.0)
 
     tris: List[Tuple[int,int,int]] = []
     for row in range(size-1):
@@ -524,7 +533,7 @@ def build_mesh(ds: DispSide) -> Mesh:
         accum[k] = vadd(accum[k], fn)
     norms: List[Vec3] = [vnorm(n) for n in accum]
 
-    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris, material=ds.material)
+    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris, material=ds.material, alphas=alphas)
 
 
 # ---------------------------------------------------------------------------
@@ -578,9 +587,11 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
     all_n: List[Vec3]               = []
     all_uv:List[Tuple[float,float]] = []
     all_t: List[Tuple[int,int,int]] = []
+    all_a: List[float]              = []
     off = 0
     for m in meshes:
         all_v.extend(m.verts); all_n.extend(m.normals); all_uv.extend(m.uvs)
+        all_a.extend(m.alphas if m.alphas else [0.0] * len(m.verts))
         all_t.extend((i+off,j+off,k+off) for i,j,k in m.tris)
         off += len(m.verts)
 
@@ -621,18 +632,24 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
     nv: List[Vec3]               = []
     nn: List[Vec3]               = []
     nuv:List[Tuple[float,float]] = []
+    na: List[float]              = []
     nacc: Dict[int, List[Vec3]]  = {}
+    aacc: Dict[int, List[float]] = {}
     for i in range(len(all_v)):
         c = remap[i]
         if c not in canon:
             canon[c] = len(nv)
-            nv.append(all_v[c]); nn.append(all_n[c]); nuv.append(all_uv[c])
+            nv.append(all_v[c]); nn.append(all_n[c]); nuv.append(all_uv[c]); na.append(all_a[c])
             nacc[canon[c]] = [all_n[c]]
+            aacc[canon[c]] = [all_a[i]]
         else:
             nacc[canon[c]].append(all_n[i])
+            aacc[canon[c]].append(all_a[i])
 
     for ni, lst in nacc.items():
         nn[ni] = vnorm((sum(x[0] for x in lst), sum(x[1] for x in lst), sum(x[2] for x in lst)))
+    for ni, lst in aacc.items():
+        na[ni] = sum(lst) / len(lst)
 
     nt: List[Tuple[int,int,int]] = []
     for i,j,k in all_t:
@@ -643,7 +660,7 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
     from collections import Counter
     dominant_mat = Counter(m.material for m in meshes).most_common(1)[0][0]
 
-    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt, material=dominant_mat)
+    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt, material=dominant_mat, alphas=na)
 
 
 # ---------------------------------------------------------------------------

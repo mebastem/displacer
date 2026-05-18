@@ -20,12 +20,16 @@
   #topbar {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 16px;
+    gap: 8px;
+    padding: 8px 12px;
     background: #18181f;
     border-bottom: 1px solid #2a2a38;
     flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
+  #topbar::-webkit-scrollbar { display: none; }
+  #topbar button { flex-shrink: 0; }
   #topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: 1px; color: #fff; }
   #topbar .tag { font-size: 11px; color: #666; margin-left: 4px; }
 
@@ -182,6 +186,19 @@
   #btn-tex:hover { background: #25253a; color: #fff; }
   #btn-tex.has-tex { border-color: #4a7a4a; color: #7adf7a; }
 
+  #btn-vmt {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-vmt:hover { background: #25253a; color: #fff; }
+  #btn-vmt.has-vmt { border-color: #7a6a3a; color: #ffd77a; }
+
   .tex-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
@@ -201,6 +218,178 @@
   }
   #toggle-wire:hover { background: #25253a; color: #fff; }
   #toggle-wire.active { background: #2a3a5a; color: #7aadff; border-color: #4a6cf7; }
+
+  #btn-flat {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-flat:hover { background: #25253a; color: #fff; }
+  #btn-flat.active { background: #2a2a1a; color: #ffe97a; border-color: #c8a030; }
+
+  #btn-bake {
+    padding: 7px 14px;
+    background: #1e1e2a;
+    color: #aaa;
+    border: 1px solid #333;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  #btn-bake:hover:not(:disabled) { background: #25253a; color: #fff; }
+  #btn-bake:disabled { opacity: .4; cursor: default; }
+  #btn-bake.baking { background: #2a1e1e; color: #f7a04a; border-color: #a06030; }
+
+  /* ── Import modal ───────────────────────────────────────── */
+  #import-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  #import-modal.open { display: flex; }
+  #import-panel {
+    background: #18181f;
+    border: 1px solid #2a2a38;
+    border-radius: 10px;
+    width: 360px;
+    overflow: hidden;
+    box-shadow: 0 12px 48px rgba(0,0,0,.7);
+  }
+  .imp-header {
+    padding: 14px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .imp-header span { font-size: 11px; color: #555; font-weight: 400; }
+  .imp-close { background: none; border: none; color: #555; font-size: 18px; cursor: pointer; padding: 0 4px; }
+  .imp-close:hover { color: #fff; }
+  .imp-section { padding: 14px 18px; border-bottom: 1px solid #1a1a24; }
+  .imp-section:last-child { border-bottom: none; }
+  .imp-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: #555; margin-bottom: 10px; }
+  .imp-radio-group { display: flex; flex-direction: column; gap: 6px; }
+  .imp-radio {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12px; color: #aaa; cursor: pointer;
+    padding: 6px 8px; border-radius: 5px; transition: background .1s;
+    border: 1px solid transparent;
+  }
+  .imp-radio:hover { background: #1e1e2a; }
+  .imp-radio.selected { background: #1a1e30; border-color: #3a4a7a; color: #fff; }
+  .imp-radio input[type=radio] { accent-color: #4a6cf7; margin-top: 1px; flex-shrink: 0; }
+  .imp-radio-body { display: flex; flex-direction: column; gap: 2px; }
+  .imp-radio-title { font-weight: 600; }
+  .imp-radio-desc { font-size: 10px; color: #555; }
+  .imp-radio.selected .imp-radio-desc { color: #668; }
+  .imp-row {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: #aaa; padding: 5px 0;
+  }
+  .imp-row input[type=number] {
+    width: 80px; background: #111118; border: 1px solid #333;
+    border-radius: 4px; color: #ccc; font-size: 12px;
+    padding: 4px 8px; text-align: right;
+  }
+  .imp-row input[type=number]:focus { outline: none; border-color: #4a6cf7; }
+  .imp-row.disabled { opacity: .35; pointer-events: none; }
+  #btn-imp-choose {
+    width: 100%; padding: 10px;
+    background: #2a3a5a; color: #7aadff;
+    border: 1px solid #4a6cf7; border-radius: 6px;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: all .15s; margin-top: 4px;
+  }
+  #btn-imp-choose:hover { background: #3a4a7a; }
+
+  /* ── Bake modal ──────────────────────────────────────────── */
+  #bake-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  #bake-modal.open { display: flex; }
+  #bake-panel {
+    background: #18181f;
+    border: 1px solid #2a2a38;
+    border-radius: 10px;
+    width: 380px;
+    padding: 0;
+    overflow: hidden;
+    box-shadow: 0 12px 48px rgba(0,0,0,.7);
+  }
+  .bake-header {
+    padding: 14px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    border-bottom: 1px solid #222;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .bake-header span { font-size: 11px; color: #555; font-weight: 400; }
+  .bake-close { background: none; border: none; color: #555; font-size: 18px; cursor: pointer; padding: 0 4px; }
+  .bake-close:hover { color: #fff; }
+  .bake-section { padding: 14px 18px; border-bottom: 1px solid #1a1a24; }
+  .bake-section:last-child { border-bottom: none; }
+  .bake-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: #555; margin-bottom: 8px; }
+  .bake-file-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    background: #111118;
+    border: 1px dashed #333;
+    border-radius: 6px;
+    color: #666;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .15s;
+    width: 100%;
+    text-align: left;
+  }
+  .bake-file-btn:hover { border-color: #4a6cf7; color: #aaa; }
+  .bake-file-btn.has-files { border-color: #4a7a4a; color: #7adf7a; border-style: solid; }
+  .bake-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #aaa; padding: 4px 0; }
+  .bake-row select {
+    background: #111118; border: 1px solid #333; border-radius: 4px;
+    color: #ccc; font-size: 12px; padding: 4px 8px; cursor: pointer;
+  }
+  .bake-row select:focus { outline: none; border-color: #4a6cf7; }
+  #bake-status { font-size: 11px; color: #666; padding: 6px 0 0; min-height: 16px; }
+  #btn-start-bake {
+    width: 100%;
+    padding: 10px;
+    background: #2a3a5a;
+    color: #7aadff;
+    border: 1px solid #4a6cf7;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+    margin-top: 4px;
+  }
+  #btn-start-bake:hover:not(:disabled) { background: #3a4a7a; }
+  #btn-start-bake:disabled { opacity: .4; cursor: default; }
 
   #btn-pick {
     padding: 7px 14px;
@@ -270,43 +459,67 @@
   }
   #stats span { color: #9ab; }
 
+  #sidebar-search {
+    padding: 8px 10px;
+    border-bottom: 1px solid #1e1e28;
+    flex-shrink: 0;
+  }
+  #sidebar-search input {
+    width: 100%;
+    background: #111118;
+    border: 1px solid #2a2a38;
+    border-radius: 5px;
+    color: #ccc;
+    font-size: 12px;
+    padding: 5px 8px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  #sidebar-search input:focus { border-color: #4a6cf7; }
+  #sidebar-search input::placeholder { color: #444; }
+
   #group-list {
     flex: 1;
     overflow-y: auto;
-    padding: 6px 0;
+    padding: 4px 0;
   }
   #group-list::-webkit-scrollbar { width: 4px; }
   #group-list::-webkit-scrollbar-track { background: transparent; }
   #group-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
-  .group-item {
+  .mat-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 7px 14px;
+    gap: 9px;
+    padding: 7px 12px;
     cursor: pointer;
     font-size: 12px;
     color: #aaa;
     transition: background .1s;
     user-select: none;
+    border-left: 2px solid transparent;
   }
-  .group-item:hover { background: #1a1a25; }
-  .group-item.selected { background: #1e2035; color: #fff; }
+  .mat-item:hover { background: #1a1a25; color: #ddd; }
+  .mat-item.selected { background: #1a1e32; color: #fff; border-left-color: var(--mat-color, #4a6cf7); }
 
-  .group-dot {
-    width: 10px; height: 10px;
+  .mat-dot {
+    width: 9px; height: 9px;
     border-radius: 50%;
     flex-shrink: 0;
   }
-
-  .group-tiles {
-    margin-left: auto;
-    font-size: 10px;
-    color: #444;
+  .mat-body { flex: 1; min-width: 0; }
+  .mat-name {
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .mat-sub { font-size: 10px; color: #555; margin-top: 1px; }
+  .mat-item.selected .mat-sub { color: #668; }
 
   #show-all {
-    padding: 10px 14px;
+    padding: 9px 14px;
     font-size: 12px;
     color: #4a6cf7;
     cursor: pointer;
@@ -390,10 +603,36 @@
     bottom: 14px;
     right: 14px;
     font-size: 11px;
-    color: #333;
+    color: #aaa;
     text-align: right;
     pointer-events: none;
+    background: rgba(10, 10, 18, 0.55);
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.05);
+    backdrop-filter: blur(4px);
+    line-height: 1.7;
+    letter-spacing: 0.2px;
   }
+
+  #fps {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #555;
+    pointer-events: none;
+    letter-spacing: 0.5px;
+    transition: color .4s;
+    background: rgba(10, 10, 18, 0.55);
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  #fps.good   { color: #4a9a4a; }
+  #fps.medium { color: #c8a030; }
+  #fps.bad    { color: #c84040; }
 </style>
 </head>
 <body>
@@ -403,7 +642,10 @@
   <h1>DISPLACER <span class="tag">VMF → 3D</span></h1>
   <button id="toggle-wire">Wireframe</button>
   <button id="btn-reset">Reset View</button>
+  <button id="btn-flat">Flat Light</button>
+  <button id="btn-vmt">Load VMTs</button>
   <button id="btn-tex">Load Textures</button>
+  <button id="btn-bake" disabled>Bake &amp; Export</button>
   <button id="btn-pick" disabled>Tile Picker</button>
   <div style="position:relative;display:flex">
     <button id="btn-export" disabled>Export OBJ</button>
@@ -460,6 +702,90 @@
   <button id="btn-load">Load VMF</button>
   <input type="file" id="file-input" accept=".vmf" style="display:none">
   <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
+  <input type="file" id="vmt-input" accept=".vmt" multiple style="display:none">
+</div>
+
+<!-- Import modal -->
+<div id="import-modal">
+  <div id="import-panel">
+    <div class="imp-header">
+      Load VMF
+      <span>Configure how displacements are imported</span>
+      <button class="imp-close" id="imp-close">✕</button>
+    </div>
+
+    <div class="imp-section">
+      <div class="imp-label">Grouping</div>
+      <div class="imp-radio-group">
+        <label class="imp-radio selected" id="imp-radio-group">
+          <input type="radio" name="imp-mode" value="group" checked>
+          <div class="imp-radio-body">
+            <div class="imp-radio-title">Group by proximity</div>
+            <div class="imp-radio-desc">Adjacent tiles are merged into groups — fewer draw calls, seams welded</div>
+          </div>
+        </label>
+        <label class="imp-radio" id="imp-radio-none">
+          <input type="radio" name="imp-mode" value="none">
+          <div class="imp-radio-body">
+            <div class="imp-radio-title">No grouping — every tile standalone</div>
+            <div class="imp-radio-desc">Each displacement is its own independent mesh — useful for per-tile inspection or export</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <div class="imp-section" id="imp-group-opts">
+      <div class="imp-label">Group Options</div>
+      <div class="imp-row">
+        <span>Proximity threshold <span style="color:#444;font-size:10px">(Source units)</span></span>
+        <input type="number" id="imp-proximity" value="4" min="0" max="512" step="1">
+      </div>
+      <div class="imp-row">
+        <span>Weld distance <span style="color:#444;font-size:10px">(Source units)</span></span>
+        <input type="number" id="imp-weld" value="1" min="0" max="64" step="0.5">
+      </div>
+    </div>
+
+    <div class="imp-section">
+      <button id="btn-imp-choose">Choose VMF file…</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bake modal -->
+<div id="bake-modal">
+  <div id="bake-panel">
+    <div class="bake-header">
+      Bake &amp; Export
+      <span>Blends textures using VMF alpha data → ready for Blender / GoldSrc</span>
+      <button class="bake-close" id="bake-close">✕</button>
+    </div>
+
+    <div class="bake-section">
+      <div class="bake-label">VMT Files <span style="color:#444;text-transform:none;font-size:10px">— the material definitions (.vmt)</span></div>
+      <button class="bake-file-btn" id="bake-vmt-btn">📄 Select .vmt files…</button>
+      <input type="file" id="bake-vmt-input" accept=".vmt" multiple style="display:none">
+    </div>
+
+    <div class="bake-section">
+      <div class="bake-label">Texture Files <span style="color:#444;text-transform:none;font-size:10px">— diffuse + normal maps (.bmp/.png)</span></div>
+      <button class="bake-file-btn" id="bake-tex-btn">🖼 Select texture files…</button>
+      <input type="file" id="bake-tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
+    </div>
+
+    <div class="bake-section">
+      <div class="bake-row">
+        <span>Bake resolution</span>
+        <select id="bake-resolution">
+          <option value="1024">1024 × 1024</option>
+          <option value="2048" selected>2048 × 2048</option>
+          <option value="4096">4096 × 4096</option>
+        </select>
+      </div>
+      <div id="bake-status"></div>
+      <button id="btn-start-bake">Start Bake</button>
+    </div>
+  </div>
 </div>
 
 <!-- Main -->
@@ -467,8 +793,11 @@
 
   <!-- Sidebar -->
   <div id="sidebar">
-    <div id="sidebar-header">Groups</div>
+    <div id="sidebar-header">Materials</div>
     <div id="stats">No file loaded</div>
+    <div id="sidebar-search" style="display:none">
+      <input type="text" id="mat-search" placeholder="Filter materials…" autocomplete="off">
+    </div>
     <div id="group-list"></div>
     <div id="show-all" style="display:none">Show all</div>
   </div>
@@ -489,6 +818,7 @@
     </div>
 
     <canvas id="canvas"></canvas>
+    <div id="fps"></div>
     <div id="pick-info"></div>
     <div id="hud">Click to capture mouse &nbsp;·&nbsp; Esc to release &nbsp;·&nbsp; WASD: fly &nbsp;·&nbsp; E/Q: up/down &nbsp;·&nbsp; Shift: fast &nbsp;·&nbsp; Scroll: speed &nbsp;·&nbsp; F: reset view</div>
   </div>
@@ -511,12 +841,29 @@ import { LineSegments2 }        from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial }         from 'three/addons/lines/LineMaterial.js';
 
-// ── Palette ──────────────────────────────────────────────────────────────────
-const PALETTE = [
-  0x4a6cf7, 0xf76a4a, 0x4af7a0, 0xf7e24a,
-  0xc44af7, 0x4ad4f7, 0xf74a9a, 0xa0f74a,
-  0xf7a04a, 0x4af7e2, 0x7a4af7, 0xf7f74a,
-];
+// ── Material → color ──────────────────────────────────────────────────────────
+function materialColor(mat) {
+  // Deterministic hash of the material leaf name → HSL color
+  const leaf = mat ? mat.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
+  let h = 0;
+  for (let i = 0; i < leaf.length; i++) h = (Math.imul(31, h) + leaf.charCodeAt(i)) >>> 0;
+  const hue = (h % 360) / 360;
+  // Convert HSL(hue, 0.65, 0.58) → RGB hex
+  const s = 0.65, l = 0.58;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hue2rgb = (t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  const r = Math.round(hue2rgb(hue + 1/3) * 255);
+  const g = Math.round(hue2rgb(hue)       * 255);
+  const b = Math.round(hue2rgb(hue - 1/3) * 255);
+  return (r << 16) | (g << 8) | b;
+}
 
 // ── Three.js setup ───────────────────────────────────────────────────────────
 const canvas   = document.getElementById('canvas');
@@ -529,10 +876,12 @@ const camera = new THREE.PerspectiveCamera(75, 1, 1, 1e7);
 camera.position.set(0, 3000, 6000);
 
 // Lighting
-scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(5000, 8000, 3000);
 scene.add(sun);
+let flatLight = false;
 
 // Grid
 const grid = new THREE.GridHelper(50000, 100, 0x222233, 0x1a1a28);
@@ -639,15 +988,51 @@ function tickFly(dt) {
   if (keys['KeyQ'] || keys['ControlLeft']) camera.position.y -= d;
 }
 
-// Render loop
+// ── FPS counter ───────────────────────────────────────────────────────────────
+const fpsEl = document.getElementById('fps');
+let _fpsFrames = 0, _fpsTime = performance.now();
+
+function updateFps(now) {
+  _fpsFrames++;
+  if (now - _fpsTime >= 500) {
+    const fps = Math.round(_fpsFrames * 1000 / (now - _fpsTime));
+    fpsEl.textContent = fps + ' fps';
+    fpsEl.className = fps >= 50 ? 'good' : fps >= 25 ? 'medium' : 'bad';
+    _fpsFrames = 0;
+    _fpsTime = now;
+  }
+}
+
+// ── Render on demand ──────────────────────────────────────────────────────────
+// Only render when something is actually changing — huge win for idle frames.
+let _dirty     = true;   // force first frame
+let _lastRender = 0;
+const MAX_IDLE_MS = 2000; // force a render at least every 2 s (keeps Three.js alive)
+
+function markDirty() { _dirty = true; }
+
+// Intercept pointer-lock mouse moves to mark dirty
+document.addEventListener('mousemove', () => {
+  if (document.pointerLockElement === canvas) markDirty();
+});
+
 let _lastT = performance.now();
 (function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
   const dt  = Math.min((now - _lastT) / 1000, 0.1);
   _lastT = now;
+
+  const anyKey = Object.values(keys).some(Boolean);
+  if (anyKey) markDirty();
   tickFly(dt);
-  renderer.render(scene, camera);
+
+  if (_dirty || now - _lastRender > MAX_IDLE_MS) {
+    renderer.render(scene, camera);
+    updateFps(now);
+    _dirty      = false;
+    _lastRender = now;
+  }
 })();
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -660,6 +1045,83 @@ let pickMode     = false;
 let lastFile     = null; // cached File for re-processing
 let tileOutline  = null; // current thick orange tile outline (LineSegments2)
 
+// VMT state
+const vmtByLeaf  = {};   // leaf → parsed VMT dict {__shader__, $seamless_scale, $basetexture, ...}
+
+function parseVmt(text) {
+  text = text.replace(/\/\/[^\n]*/g, '');
+  const result = {};
+  const sm = text.match(/"(\w+)"/);
+  if (sm) result.__shader__ = sm[1].toLowerCase();
+  const re = /"?(\$[^"\s]+)"?\s+(?:"([^"]*)"|([^\s"{}\n]+))/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    result[m[1].toLowerCase()] = m[2] !== undefined ? m[2] : m[3];
+  }
+  return result;
+}
+
+function leafNoExt(path) {
+  const name = path.replace(/\\/g, '/').split('/').pop().toLowerCase();
+  return name.includes('.') ? name.replace(/\.[^.]+$/, '') : name;
+}
+
+// GLSL blend shader — triplanar mapping to eliminate stretching on steep faces
+const BLEND_VERT = `
+  attribute float vBlendAlpha;
+  varying vec3  vWorldPos;
+  varying float vAlpha;
+  varying vec3  vViewNorm;
+  varying vec3  vWorldNorm;
+  void main() {
+    vWorldPos  = position;
+    vAlpha     = vBlendAlpha;
+    vViewNorm  = normalMatrix * normal;
+    vWorldNorm = mat3(modelMatrix) * normal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const BLEND_FRAG = `
+  uniform sampler2D uTex1;
+  uniform sampler2D uTex2;
+  uniform float uScale;
+  uniform float uHasTex1;
+  uniform float uHasTex2;
+  uniform float uHasBlend;
+  uniform float uFlat;
+  varying vec3  vWorldPos;
+  varying float vAlpha;
+  varying vec3  vViewNorm;
+  varying vec3  vWorldNorm;
+
+  vec3 triplanar(sampler2D tex, vec3 pos, vec3 n, float scale) {
+    vec3 w = pow(abs(n), vec3(6.0));
+    w /= (w.x + w.y + w.z + 0.0001);
+    vec3 cX = texture2D(tex, vec2(-pos.z,  pos.y) * scale).rgb;
+    vec3 cY = texture2D(tex, vec2( pos.x, -pos.z) * scale).rgb;
+    vec3 cZ = texture2D(tex, vec2( pos.x,  pos.y) * scale).rgb;
+    return cX * w.x + cY * w.y + cZ * w.z;
+  }
+
+  void main() {
+    vec3 n = normalize(vWorldNorm);
+    vec3 lightDir = normalize(vec3(0.6, 1.0, 0.4));
+    float diff = uFlat > 0.5 ? 1.0 : clamp(dot(normalize(vViewNorm), lightDir), 0.0, 1.0) * 0.7 + 0.3;
+
+    vec3 c1, c2;
+    if (uScale > 0.0) {
+      c1 = uHasTex1 > 0.5 ? triplanar(uTex1, vWorldPos, n, uScale) : vec3(0.55);
+      c2 = uHasTex2 > 0.5 ? triplanar(uTex2, vWorldPos, n, uScale) : vec3(0.55);
+    } else {
+      c1 = uHasTex1 > 0.5 ? texture2D(uTex1, vec2(vWorldPos.x, -vWorldPos.z) * 0.002).rgb : vec3(0.55);
+      c2 = vec3(0.55);
+    }
+
+    vec3 color = uHasBlend > 0.5 ? mix(c1, c2, clamp(vAlpha, 0.0, 1.0)) : c1;
+    gl_FragColor = vec4(color * diff, 1.0);
+  }
+`;
+
 const outlineMat = new LineMaterial({
   color: 0xff8800,
   linewidth: 3,
@@ -669,7 +1131,7 @@ const outlineMat = new LineMaterial({
 });
 
 function clearTileOutline() {
-  if (tileOutline) { scene.remove(tileOutline); tileOutline.geometry.dispose(); tileOutline = null; }
+  if (tileOutline) { scene.remove(tileOutline); tileOutline.geometry.dispose(); tileOutline = null; markDirty(); }
 }
 
 function showTileOutline(meshIdx, tile) {
@@ -711,24 +1173,26 @@ function showTileOutline(meshIdx, tile) {
   ls.renderOrder = 999;
   scene.add(ls);
   tileOutline = ls;
+  markDirty();
 }
 
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
-  // Clear old meshes
-  groupMeshes.forEach(m => scene.remove(m));
-  groupWires.forEach(w => scene.remove(w));
+  // Clear and dispose old meshes
+  groupMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  groupWires.forEach(w  => { scene.remove(w); w.geometry.dispose(); w.material.dispose(); });
   clearTileOutline();
   groupMeshes = []; groupWires = [];
 
   const box = new THREE.Box3();
 
   data.groups.forEach((grp, i) => {
-    const color = PALETTE[i % PALETTE.length];
+    const color = materialColor(grp.material);
 
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(grp.verts, 3));
-    geo.setAttribute('uv',       new THREE.Float32BufferAttribute(grp.uvs,   2));
+    geo.setAttribute('position',     new THREE.Float32BufferAttribute(grp.verts,  3));
+    geo.setAttribute('uv',           new THREE.Float32BufferAttribute(grp.uvs,    2));
+    geo.setAttribute('vBlendAlpha',  new THREE.Float32BufferAttribute(grp.alphas || new Float32Array(grp.verts.length / 3), 1));
     geo.setIndex(grp.indices);
     geo.computeVertexNormals();
 
@@ -766,6 +1230,7 @@ function buildScene(data) {
   updateWireframes();
   showAll();
   applyTextures();
+  markDirty();
 }
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
@@ -773,59 +1238,119 @@ function updateWireframes() {
   groupWires.forEach(w => { w.visible = wireMode; });
 }
 
+document.getElementById('btn-flat').addEventListener('click', function () {
+  flatLight = !flatLight;
+  this.classList.toggle('active', flatLight);
+  // Scene lights for Lambert materials
+  ambientLight.intensity = flatLight ? 1.5 : 0.4;
+  sun.intensity          = flatLight ? 0.0 : 1.2;
+  // Shader materials — update uFlat uniform on all groups
+  groupMeshes.forEach(m => {
+    if (m.material.isShaderMaterial && m.material.uniforms.uFlat)
+      m.material.uniforms.uFlat.value = flatLight ? 1.0 : 0.0;
+  });
+  markDirty();
+});
+
 document.getElementById('toggle-wire').addEventListener('click', function () {
   wireMode = !wireMode;
   this.classList.toggle('active', wireMode);
   updateWireframes();
+  markDirty();
 });
 
-// ── Group list ────────────────────────────────────────────────────────────────
+// ── Group list (material-grouped) ─────────────────────────────────────────────
+let matToIndices  = {};   // leaf → [groupIdx, ...]
+let selectedMats  = new Set();
+
 function buildGroupList(data) {
+  matToIndices = {};
+  data.groups.forEach((grp, i) => {
+    const leaf = grp.material ? grp.material.replace(/\\/g, '/').split('/').pop().toLowerCase() : 'unknown';
+    (matToIndices[leaf] = matToIndices[leaf] || []).push(i);
+  });
+
+  // Sort materials by group count descending
+  const leaves = Object.keys(matToIndices).sort(
+    (a, b) => matToIndices[b].length - matToIndices[a].length
+  );
+
   const list = document.getElementById('group-list');
   list.innerHTML = '';
-  data.groups.forEach((grp, i) => {
-    const color = PALETTE[i % PALETTE.length];
-    const hex   = '#' + color.toString(16).padStart(6, '0');
-    const item  = document.createElement('div');
-    item.className = 'group-item';
-    const matLeaf = grp.material ? grp.material.split(/[/\\]/).pop() : '';
+
+  leaves.forEach(leaf => {
+    const indices    = matToIndices[leaf];
+    const color      = materialColor(data.groups[indices[0]].material);
+    const hex        = '#' + color.toString(16).padStart(6, '0');
+    const totalTiles = indices.reduce((s, i) => s + data.groups[i].tiles, 0);
+
+    const item = document.createElement('div');
+    item.className   = 'mat-item';
+    item.dataset.leaf = leaf;
+    item.style.setProperty('--mat-color', hex);
     item.innerHTML = `
-      <div class="group-dot" style="background:${hex}"></div>
-      <div style="flex:1;min-width:0">
-        <div>${grp.name}</div>
-        <div style="font-size:10px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${grp.material}">${matLeaf}</div>
+      <div class="mat-dot" style="background:${hex}"></div>
+      <div class="mat-body">
+        <div class="mat-name" title="${leaf}">${leaf}</div>
+        <div class="mat-sub">${indices.length} group${indices.length !== 1 ? 's' : ''} · ${totalTiles} tile${totalTiles !== 1 ? 's' : ''}</div>
       </div>
-      <span class="group-tiles">${grp.tiles} tile${grp.tiles !== 1 ? 's' : ''}</span>
     `;
-    item.addEventListener('click', () => {
-      selectGroup(i);
-      const ids = grp.solid_ids ? grp.solid_ids.map(([s,sd]) => `solid ${s}`).join(', ') : '';
-      console.log(`Group ${i}: ${ids}`);
-    });
+    item.addEventListener('click', e => toggleMat(leaf, e.shiftKey || e.ctrlKey || e.metaKey));
     list.appendChild(item);
   });
+
   document.getElementById('show-all').style.display = 'block';
+  document.getElementById('sidebar-search').style.display = 'block';
+
+  // Live search filter
+  document.getElementById('mat-search').addEventListener('input', function () {
+    const q = this.value.toLowerCase().trim();
+    document.querySelectorAll('.mat-item').forEach(el => {
+      el.style.display = (!q || el.dataset.leaf.includes(q)) ? '' : 'none';
+    });
+  });
+}
+
+function toggleMat(leaf, additive) {
+  if (!additive) {
+    selectedMats = (selectedMats.size === 1 && selectedMats.has(leaf))
+      ? new Set()
+      : new Set([leaf]);
+  } else {
+    selectedMats.has(leaf) ? selectedMats.delete(leaf) : selectedMats.add(leaf);
+  }
+  applyMatFilter();
+}
+
+function applyMatFilter() {
+  const all = selectedMats.size === 0;
+  groupMeshes.forEach((m, i) => {
+    const leaf = lastData.groups[i].material
+      ? lastData.groups[i].material.replace(/\\/g, '/').split('/').pop().toLowerCase()
+      : 'unknown';
+    m.visible = all || selectedMats.has(leaf);
+    groupWires[i].visible = m.visible && wireMode;
+  });
+  document.querySelectorAll('.mat-item').forEach(el => {
+    el.classList.toggle('selected', selectedMats.has(el.dataset.leaf));
+  });
+  markDirty();
 }
 
 function selectGroup(idx) {
-  selectedIdx = idx;
-  // Dim others, highlight selected
-  groupMeshes.forEach((m, i) => {
-    m.visible = (i === idx);
-    groupWires[i].visible = wireMode && (i === idx);
-  });
-  document.querySelectorAll('.group-item').forEach((el, i) => {
-    el.classList.toggle('selected', i === idx);
-  });
+  // Still used by tile picker click — isolate that group's material
+  if (!lastData) return;
+  const leaf = lastData.groups[idx].material
+    ? lastData.groups[idx].material.replace(/\\/g, '/').split('/').pop().toLowerCase()
+    : 'unknown';
+  selectedMats = new Set([leaf]);
+  applyMatFilter();
 }
 
 function showAll() {
+  selectedMats.clear();
   selectedIdx = -1;
-  groupMeshes.forEach((m, i) => {
-    m.visible = true;
-    groupWires[i].visible = wireMode;
-  });
-  document.querySelectorAll('.group-item').forEach(el => el.classList.remove('selected'));
+  applyMatFilter();
 }
 
 document.getElementById('show-all').addEventListener('click', showAll);
@@ -834,6 +1359,31 @@ document.getElementById('show-all').addEventListener('click', showAll);
 document.getElementById('btn-reset').addEventListener('click', resetView);
 window.addEventListener('keydown', e => {
   if (e.key === 'f' || e.key === 'F' || e.key === 'Home') resetView();
+});
+
+// ── VMT loading ───────────────────────────────────────────────────────────────
+document.getElementById('btn-vmt').addEventListener('click', () => {
+  document.getElementById('vmt-input').click();
+});
+document.getElementById('vmt-input').addEventListener('change', e => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  let loaded = 0;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const leaf = leafNoExt(file.name);
+      vmtByLeaf[leaf] = parseVmt(ev.target.result);
+      loaded++;
+      if (loaded === files.length) {
+        document.getElementById('btn-vmt').classList.add('has-vmt');
+        document.getElementById('btn-vmt').textContent = `VMTs (${Object.keys(vmtByLeaf).length})`;
+        applyTextures();
+      }
+    };
+    reader.readAsText(file);
+  });
+  e.target.value = '';
 });
 
 // ── Texture loading ───────────────────────────────────────────────────────────
@@ -874,21 +1424,60 @@ document.getElementById('tex-input').addEventListener('change', e => {
   e.target.value = '';
 });
 
+function makeBlendMaterial(vmt) {
+  const sc     = parseFloat(vmt['$seamless_scale'] || 0) || 0;
+  const leaf1  = vmt['$basetexture']  ? leafNoExt(vmt['$basetexture'])  : '';
+  const leaf2  = vmt['$basetexture2'] ? leafNoExt(vmt['$basetexture2']) : '';
+  const tex1   = loadedTextures[leaf1] || null;
+  const tex2   = loadedTextures[leaf2] || null;
+  const hasBlend = !!(tex2 && leaf2);
+  const mat = new THREE.ShaderMaterial({
+    vertexShader:   BLEND_VERT,
+    fragmentShader: BLEND_FRAG,
+    uniforms: {
+      uTex1:     { value: tex1 },
+      uTex2:     { value: tex2 },
+      uScale:    { value: sc },
+      uHasTex1:  { value: tex1 ? 1.0 : 0.0 },
+      uHasTex2:  { value: tex2 ? 1.0 : 0.0 },
+      uHasBlend: { value: hasBlend ? 1.0 : 0.0 },
+      uFlat:     { value: flatLight ? 1.0 : 0.0 },
+    },
+    side: THREE.DoubleSide,
+  });
+  return mat;
+}
+
 function applyTextures() {
   if (!lastData) return;
+  markDirty();
   lastData.groups.forEach((grp, i) => {
-    const leaf = grp.material ? grp.material.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
-    const tex  = loadedTextures[leaf];
-    const mesh = groupMeshes[i];
+    const matLeaf = grp.material ? grp.material.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
+    const mesh    = groupMeshes[i];
     if (!mesh) return;
-    if (tex) {
-      mesh.material.map          = tex;
-      mesh.material.color.set(0xffffff);  // white so texture shows true color
-      mesh.material.needsUpdate  = true;
-      // Mark matched in sidebar
-      const dot = document.querySelectorAll('.group-item')[i]?.querySelector('.group-dot');
-      if (dot) dot.classList.add('tex-dot');
+
+    const vmt = vmtByLeaf[matLeaf];
+    if (vmt) {
+      // Dispose old shader material if needed
+      if (mesh.material.isShaderMaterial) mesh.material.dispose();
+      mesh.material = makeBlendMaterial(vmt);
+    } else {
+      // Fallback: simple Lambert with a single texture
+      const tex = loadedTextures[matLeaf];
+      if (tex) {
+        if (mesh.material.isShaderMaterial) {
+          mesh.material.dispose();
+          mesh.material = new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+        }
+        mesh.material.map         = tex;
+        mesh.material.color.set(0xffffff);
+        mesh.material.needsUpdate = true;
+      }
     }
+
+    // Sidebar dot
+    const dot = document.querySelectorAll('.group-item')[i]?.querySelector('.group-dot');
+    if (dot && (vmt || loadedTextures[matLeaf])) dot.classList.add('tex-dot');
   });
 }
 
@@ -1113,20 +1702,149 @@ canvas.addEventListener('mousedown', e => {
   }
 }, true);
 
+// ── Bake & Export ─────────────────────────────────────────────────────────────
+const bakeModal    = document.getElementById('bake-modal');
+const bakeStatus   = document.getElementById('bake-status');
+let bakeVmtFiles   = [];
+let bakeTexFiles   = [];
+
+document.getElementById('btn-bake').addEventListener('click', () => {
+  bakeModal.classList.add('open');
+});
+document.getElementById('bake-close').addEventListener('click', () => {
+  bakeModal.classList.remove('open');
+});
+bakeModal.addEventListener('click', e => {
+  if (e.target === bakeModal) bakeModal.classList.remove('open');
+});
+
+// VMT file picker
+document.getElementById('bake-vmt-btn').addEventListener('click', () => {
+  document.getElementById('bake-vmt-input').click();
+});
+document.getElementById('bake-vmt-input').addEventListener('change', e => {
+  bakeVmtFiles = Array.from(e.target.files);
+  const btn = document.getElementById('bake-vmt-btn');
+  if (bakeVmtFiles.length) {
+    btn.textContent = `✓ ${bakeVmtFiles.length} VMT file${bakeVmtFiles.length > 1 ? 's' : ''} selected`;
+    btn.classList.add('has-files');
+  }
+  e.target.value = '';
+});
+
+// Texture file picker
+document.getElementById('bake-tex-btn').addEventListener('click', () => {
+  document.getElementById('bake-tex-input').click();
+});
+document.getElementById('bake-tex-input').addEventListener('change', e => {
+  bakeTexFiles = Array.from(e.target.files);
+  const btn = document.getElementById('bake-tex-btn');
+  if (bakeTexFiles.length) {
+    btn.textContent = `✓ ${bakeTexFiles.length} texture file${bakeTexFiles.length > 1 ? 's' : ''} selected`;
+    btn.classList.add('has-files');
+  }
+  e.target.value = '';
+});
+
+// Start bake
+document.getElementById('btn-start-bake').addEventListener('click', async () => {
+  if (!bakeVmtFiles.length && !bakeTexFiles.length) {
+    bakeStatus.textContent = 'Select at least VMT or texture files first.';
+    bakeStatus.style.color = '#f74a4a';
+    return;
+  }
+
+  const btn = document.getElementById('btn-start-bake');
+  btn.disabled = true;
+  btn.textContent = 'Baking…';
+  bakeStatus.style.color = '#f7a04a';
+  bakeStatus.textContent = 'Sending to server…';
+
+  const form = new FormData();
+  bakeVmtFiles.forEach(f  => form.append('vmts',     f));
+  bakeTexFiles.forEach(f  => form.append('textures', f));
+  form.append('resolution', document.getElementById('bake-resolution').value);
+
+  try {
+    const res = await fetch('/bake', { method: 'POST', body: form });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      bakeStatus.style.color = '#f74a4a';
+      bakeStatus.textContent = 'Error: ' + (err.error || res.statusText);
+      return;
+    }
+
+    bakeStatus.style.color = '#7adf7a';
+    bakeStatus.textContent = 'Done! Downloading ZIP…';
+
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (lastData?.filename?.replace('.vmf','') || 'terrain') + '_baked.zip';
+    a.click();
+
+    setTimeout(() => {
+      bakeStatus.textContent = '';
+      bakeModal.classList.remove('open');
+    }, 2000);
+  } catch (e) {
+    bakeStatus.style.color = '#f74a4a';
+    bakeStatus.textContent = 'Network error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start Bake';
+  }
+});
+
+// ── Import modal ──────────────────────────────────────────────────────────────
+const importModal = document.getElementById('import-modal');
+
+function getImportSettings() {
+  const mode = document.querySelector('input[name="imp-mode"]:checked')?.value || 'group';
+  return {
+    no_merge:  mode === 'none',
+    proximity: parseFloat(document.getElementById('imp-proximity').value) || 4,
+    weld:      parseFloat(document.getElementById('imp-weld').value) || 1,
+  };
+}
+
+// Radio highlight + group opts visibility
+document.querySelectorAll('input[name="imp-mode"]').forEach(r => {
+  r.addEventListener('change', () => {
+    document.getElementById('imp-radio-group').classList.toggle('selected', r.value === 'group');
+    document.getElementById('imp-radio-none').classList.toggle('selected', r.value === 'none');
+    document.getElementById('imp-group-opts').style.opacity = r.value === 'none' ? '0.35' : '1';
+    document.getElementById('imp-group-opts').style.pointerEvents = r.value === 'none' ? 'none' : '';
+  });
+});
+
+document.getElementById('imp-close').addEventListener('click', () => importModal.classList.remove('open'));
+importModal.addEventListener('click', e => { if (e.target === importModal) importModal.classList.remove('open'); });
+
+document.getElementById('btn-imp-choose').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+
 // ── Upload / process ──────────────────────────────────────────────────────────
-async function processFile(file, debugTiles = false) {
+async function processFile(file) {
+  importModal.classList.remove('open');
+
   const loading = document.getElementById('loading');
   const loadingText = document.getElementById('loading-text');
   loading.classList.add('visible');
   loadingText.textContent = `Processing ${file.name}…`;
 
   lastFile = file;
+  const s    = getImportSettings();
   const form = new FormData();
-  form.append('vmf', file);
-  const url = debugTiles ? '/process?debug_tiles=1' : '/process';
+  form.append('vmf',       file);
+  form.append('no_merge',  s.no_merge  ? 'true' : 'false');
+  form.append('proximity', s.proximity);
+  form.append('weld',      s.weld);
 
   try {
-    const res  = await fetch(url, { method: 'POST', body: form });
+    const res  = await fetch('/process', { method: 'POST', body: form });
     const data = await res.json();
 
     if (data.error) {
@@ -1142,6 +1860,7 @@ async function processFile(file, debugTiles = false) {
     document.getElementById('btn-export').disabled = false;
     document.getElementById('btn-export-settings').disabled = false;
     document.getElementById('btn-pick').disabled = false;
+    document.getElementById('btn-bake').disabled = false;
     buildScene(data);
     buildGroupList(data);
     updateStats(data);
@@ -1152,15 +1871,16 @@ async function processFile(file, debugTiles = false) {
   }
 }
 
-// File input
+// Load VMF button → open import modal
 document.getElementById('btn-load').addEventListener('click', () => {
-  document.getElementById('file-input').click();
+  importModal.classList.add('open');
 });
 document.getElementById('file-input').addEventListener('change', e => {
   if (e.target.files[0]) processFile(e.target.files[0]);
+  e.target.value = '';
 });
 
-// Drag & drop
+// Drag & drop bypasses the modal (uses current settings)
 const dropZone = document.getElementById('drop-zone');
 const viewport = document.getElementById('viewport');
 
