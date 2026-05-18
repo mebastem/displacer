@@ -507,6 +507,9 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { LineSegments2 }        from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial }         from 'three/addons/lines/LineMaterial.js';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const PALETTE = [
@@ -655,12 +658,67 @@ let lastData     = null; // raw JSON from server
 let selectedIdx  = -1;
 let pickMode     = false;
 let lastFile     = null; // cached File for re-processing
+let tileOutline  = null; // current thick orange tile outline (LineSegments2)
+
+const outlineMat = new LineMaterial({
+  color: 0xff8800,
+  linewidth: 3,
+  depthTest: false,
+  transparent: true,
+  opacity: 0.95,
+});
+
+function clearTileOutline() {
+  if (tileOutline) { scene.remove(tileOutline); tileOutline.geometry.dispose(); tileOutline = null; }
+}
+
+function showTileOutline(meshIdx, tile) {
+  clearTileOutline();
+
+  const mesh    = groupMeshes[meshIdx];
+  const pos     = mesh.geometry.attributes.position;
+  const idxArr  = mesh.geometry.index.array;
+
+  // Find boundary edges: appear exactly once among tile's triangles
+  const edgeCount = new Map();
+  const triEnd = tile.tri_start + tile.tri_count;
+  for (let t = tile.tri_start; t < triEnd; t++) {
+    const a = idxArr[t*3], b = idxArr[t*3+1], c = idxArr[t*3+2];
+    for (const [p, q] of [[a,b],[b,c],[c,a]]) {
+      const key = p < q ? `${p}_${q}` : `${q}_${p}`;
+      edgeCount.set(key, (edgeCount.get(key) || 0) + 1);
+    }
+  }
+
+  // LineSegmentsGeometry.setPositions takes flat [x0,y0,z0, x1,y1,z1, x2,y2,z2, x3,y3,z3, ...]
+  // where consecutive pairs are independent segments
+  const pts = [];
+  for (const [key, count] of edgeCount) {
+    if (count !== 1) continue;
+    const [p, q] = key.split('_').map(Number);
+    pts.push(pos.getX(p), pos.getY(p), pos.getZ(p),
+             pos.getX(q), pos.getY(q), pos.getZ(q));
+  }
+  if (!pts.length) return;
+
+  const vp  = document.getElementById('viewport');
+  outlineMat.resolution.set(vp.clientWidth, vp.clientHeight);
+
+  const geo = new LineSegmentsGeometry();
+  geo.setPositions(pts);
+
+  const ls = new LineSegments2(geo, outlineMat);
+  ls.renderOrder = 999;
+  scene.add(ls);
+  tileOutline = ls;
+}
 
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
   // Clear old meshes
   groupMeshes.forEach(m => scene.remove(m));
   groupWires.forEach(w => scene.remove(w));
+  clearTileOutline();
   groupMeshes = []; groupWires = [];
 
   const box = new THREE.Box3();
@@ -1015,6 +1073,7 @@ btnPick.addEventListener('click', () => {
       'Tile Picker ON — click any tile to see its solid/side ID · ESC to release mouse · F: reset view';
   } else {
     pickInfo.classList.remove('visible');
+    clearTileOutline();
     document.getElementById('hud').textContent =
       'Click to capture mouse · Esc to release · WASD: fly · E/Q: up/down · Shift: fast · Scroll: speed · F: reset view';
   }
@@ -1047,8 +1106,10 @@ canvas.addEventListener('mousedown', e => {
     const mat = tile.material ? tile.material.split(/[/\\]/).pop() : '?';
     pickInfo.textContent = `solid_id: ${tile.solid_id}\nside_id:  ${tile.side_id}\nmaterial: ${mat}`;
     console.log(`Picked tile — solid_id: ${tile.solid_id}, side_id: ${tile.side_id}, material: ${tile.material}, group: ${grp.name}`);
+    showTileOutline(meshIdx, tile);
   } else {
     pickInfo.textContent = `group: ${grp.name}\nfaceIndex: ${faceIdx} (no tile_map)`;
+    clearTileOutline();
   }
 }, true);
 

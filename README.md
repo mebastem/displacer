@@ -12,18 +12,30 @@ Extracts displacement surfaces from Source Engine VMF files and exports them for
 ## Requirements
 
 - Python 3.14+
-- [uv](https://docs.astral.sh/uv/) for dependency installation from `pyproject.toml` / `uv.lock`
+- Flask (`pip install flask`)
 
-Install dependencies:
+### With [uv](https://docs.astral.sh/uv/) (recommended)
 
 ```
 uv sync
 ```
 
-## Web Viewer
+### With pip
 
 ```
+pip install flask
+```
+
+## Web Viewer
+
+**With uv:**
+```
 uv run python app.py
+```
+
+**With Python directly:**
+```
+python app.py
 ```
 
 Opens at `http://127.0.0.1:5000` automatically.
@@ -39,8 +51,14 @@ Controls: scroll to zoom, left-drag to orbit, right-drag to pan.
 
 ## CLI — VMF → OBJ
 
+**With uv:**
 ```
 uv run python vmf_disp_to_obj.py yourmap.vmf
+```
+
+**With Python directly:**
+```
+python vmf_disp_to_obj.py yourmap.vmf
 ```
 
 Options:
