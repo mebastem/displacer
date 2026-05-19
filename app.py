@@ -45,6 +45,7 @@ def process():
         parser = VMFParser(content)
         blocks = parser.parse()
         sides  = extract_disp_sides(blocks)
+        lights = extract_lights(blocks)
     except Exception as e:
         return jsonify({'error': f'VMF parse error: {e}'}), 400
 
@@ -129,7 +130,8 @@ def process():
                 'normals':   norms,
                 'uvs':       uvs,
                 'indices':   indices,
-                'alphas':    alphas,
+                'alphas':      alphas,
+                'tex_density': merged.tex_density,
             })
 
     return jsonify({
@@ -138,7 +140,71 @@ def process():
         'converted_disps': len(meshes),
         'warnings':    warnings,
         'groups':      out_groups,
+        'lights':      lights,
     })
+
+
+_LIGHT_CLASSES = {'light', 'light_spot', 'light_environment', 'light_dynamic'}
+
+def _parse_color(s, default='255 255 255 200'):
+    parts = (s or default).split()
+    try:
+        r, g, b = float(parts[0]), float(parts[1]), float(parts[2])
+        brightness = float(parts[3]) if len(parts) >= 4 else 200.0
+    except (IndexError, ValueError):
+        r, g, b, brightness = 255.0, 255.0, 255.0, 200.0
+    return [round(r / 255.0, 4), round(g / 255.0, 4), round(b / 255.0, 4)], brightness
+
+def _parse_vec3f(s, default='0 0 0'):
+    parts = (s or default).split()
+    try:
+        return [float(parts[0]), float(parts[1]), float(parts[2])]
+    except (IndexError, ValueError):
+        return [0.0, 0.0, 0.0]
+
+def extract_lights(blocks):
+    lights = []
+
+    def walk(node):
+        name = node.get('__name__', '')
+        if name == 'entity':
+            raw_cls = node.get('classname', '')
+            if isinstance(raw_cls, list): raw_cls = raw_cls[0]
+            cls = raw_cls.lower()
+            if cls in _LIGHT_CLASSES:
+                color, brightness = _parse_color(node.get('_light'))
+                angles = _parse_vec3f(node.get('angles', '0 0 0'))
+                origin = _parse_vec3f(node.get('origin', '0 0 0'))
+                entry = {
+                    'classname': cls,
+                    'origin':    origin,
+                    'color':     color,
+                    'brightness': brightness,
+                    'angles':    angles,           # [pitch, yaw, roll]
+                }
+                if 'pitch' in node:               # explicit pitch override
+                    try: entry['pitch'] = float(node['pitch'])
+                    except ValueError: pass
+                if cls == 'light_spot':
+                    try: entry['cone']       = float(node.get('_cone', 45))
+                    except ValueError: entry['cone'] = 45.0
+                    try: entry['inner_cone'] = float(node.get('_inner_cone', 30))
+                    except ValueError: entry['inner_cone'] = 30.0
+                if cls == 'light_environment':
+                    amb_color, amb_brightness = _parse_color(node.get('_ambient'), '128 128 128 100')
+                    entry['ambient_color']      = amb_color
+                    entry['ambient_brightness'] = amb_brightness
+                lights.append(entry)
+            return
+
+        for val in node.values():
+            for item in (val if isinstance(val, list) else [val]):
+                if isinstance(item, dict):
+                    walk(item)
+
+    for b in blocks:
+        walk(b)
+    return lights
 
 
 def _prepare_bake_inputs(vmf_text, vmt_files, tex_files, resolution):

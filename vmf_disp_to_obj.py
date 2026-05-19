@@ -87,8 +87,9 @@ class Mesh:
     normals:  List[Vec3]
     uvs:      List[Tuple[float,float]]
     tris:     List[Tuple[int,int,int]]  # 0-based vertex indices
-    material: str = 'NODRAW'
-    alphas:   List[float] = field(default_factory=list)  # per-vertex blend 0-1
+    material:    str   = 'NODRAW'
+    alphas:      List[float] = field(default_factory=list)  # per-vertex blend 0-1
+    tex_density: float = 0.0  # texels per Source unit (for auto triplanar scale)
 
     def bbox(self):
         xs = [v[0] for v in self.verts]
@@ -498,8 +499,10 @@ def build_mesh(ds: DispSide) -> Mesh:
             # UV: use VMF texture projection if available, else fall back to grid 0-1
             if ds.tex_axes:
                 ta = ds.tex_axes
-                u = (vdot(pos, ta.udir) + ta.uoffset) / ta.uscale
-                v = (vdot(pos, ta.vdir) + ta.voffset) / ta.vscale
+                # Drop uoffset/voffset so adjacent tiles with different offsets
+                # have continuous UVs at their shared edges (no seam).
+                u = vdot(pos, ta.udir) / ta.uscale
+                v = vdot(pos, ta.vdir) / ta.vscale
                 uvs.append((u, v))
             else:
                 uvs.append((s, t))
@@ -533,7 +536,13 @@ def build_mesh(ds: DispSide) -> Mesh:
         accum[k] = vadd(accum[k], fn)
     norms: List[Vec3] = [vnorm(n) for n in accum]
 
-    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris, material=ds.material, alphas=alphas)
+    tex_density = 0.0
+    if ds.tex_axes:
+        ta = ds.tex_axes
+        ud = (vlen(ta.udir) / ta.uscale + vlen(ta.vdir) / ta.vscale) / 2.0
+        tex_density = ud
+    return Mesh(verts=verts, normals=norms, uvs=uvs, tris=tris, material=ds.material,
+                alphas=alphas, tex_density=tex_density)
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +669,10 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
     from collections import Counter
     dominant_mat = Counter(m.material for m in meshes).most_common(1)[0][0]
 
-    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt, material=dominant_mat, alphas=na)
+    densities = [m.tex_density for m in meshes if m.tex_density > 0]
+    avg_density = sum(densities) / len(densities) if densities else 0.0
+    return Mesh(verts=nv, normals=nn, uvs=nuv, tris=nt, material=dominant_mat, alphas=na,
+                tex_density=avg_density)
 
 
 # ---------------------------------------------------------------------------
