@@ -648,7 +648,7 @@
   <button id="btn-bake" disabled>Bake &amp; Export</button>
   <button id="btn-pick" disabled>Tile Picker</button>
   <div style="position:relative;display:flex">
-    <button id="btn-export" disabled>Export OBJ</button>
+    <button id="btn-export" disabled title="Exports baked OBJ (identical to viewer) if textures are loaded, otherwise raw geometry OBJ">Export OBJ</button>
     <button id="btn-export-settings" disabled title="Export settings">&#9881;</button>
     <div id="export-settings-modal">
       <div class="esm-header">Export Settings <span id="esm-scope-tag">all groups</span></div>
@@ -825,6 +825,7 @@
 </div>
 
 <!-- Three.js r158 -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script type="importmap">
 {
@@ -1365,6 +1366,8 @@ window.addEventListener('keydown', e => {
 document.getElementById('btn-vmt').addEventListener('click', () => {
   document.getElementById('vmt-input').click();
 });
+const vmtFileStore = {};  // leaf name (lowercase) → File
+
 document.getElementById('vmt-input').addEventListener('change', e => {
   const files = Array.from(e.target.files);
   if (!files.length) return;
@@ -1373,7 +1376,8 @@ document.getElementById('vmt-input').addEventListener('change', e => {
     const reader = new FileReader();
     reader.onload = ev => {
       const leaf = leafNoExt(file.name);
-      vmtByLeaf[leaf] = parseVmt(ev.target.result);
+      vmtByLeaf[leaf]    = parseVmt(ev.target.result);
+      vmtFileStore[leaf] = file;
       loaded++;
       if (loaded === files.length) {
         document.getElementById('btn-vmt').classList.add('has-vmt');
@@ -1531,120 +1535,655 @@ function getExportSettings() {
   };
 }
 
-// ── Export ────────────────────────────────────────────────────────────────────
-document.getElementById('btn-export').addEventListener('click', () => {
-  if (!lastData) return;
-  const s = getExportSettings();
+// ── Shared SSE bake runner ────────────────────────────────────────────────────
+async function _runBakeSSE(form, { onProgress, onDone, onError }) {
+  const res = await fetch('/bake', { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    onError(err.error || res.statusText);
+    return;
+  }
+  const reader = res.body.getReader();
+  const dec    = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      let msg;
+      try { msg = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      if (msg.progress) onProgress(msg.progress);
+      if (msg.error)    { onError(msg.error); return; }
+      if (msg.done) {
+        const bytes = Uint8Array.from(atob(msg.zip), c => c.charCodeAt(0));
+        onDone(new Blob([bytes], { type: 'application/zip' }), msg.filename);
+        return;
+      }
+    }
+  }
+}
 
-  // Resolve which groups to export
+// ── Export with world-space seamless UVs (viewer-identical quality) ──────────
+// UVs are computed per-vertex from world position * seamless_scale, same as
+// the viewer's GLSL shader. They tile outside [0,1] — Blender repeats the
+// full-res source texture, so quality is identical to the viewer.
+function _exportSeamlessUV(s) {
+  const dl = (blob, name) => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  };
+
+  // Collect visible groups
   let groups;
   if (s.scope === 'selected' && selectedIdx >= 0) {
     groups = [lastData.groups[selectedIdx]];
-  } else if (s.scope === 'single') {
-    // Merge all groups into one virtual group for export
-    groups = ['__single__'];
   } else {
-    groups = lastData.groups;
+    groups = lastData.groups.filter((_, i) => groupMeshes[i]?.visible !== false);
   }
 
-  const dl = (blob, filename) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename; a.click();
-  };
+  groups.forEach(grp => {
+    const matLeaf = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop().toLowerCase() : '';
+    const vmt     = vmtByLeaf[matLeaf] || {};
+    const sc      = parseFloat(vmt['$seamless_scale'] || 0) || 0;
 
-  // Build flat arrays for single-file mode by concatenating all groups
-  function buildSingleGroup() {
-    const allVerts = [], allNorms = [], allUVs = [], allIdx = [];
-    let offset = 0;
-    lastData.groups.forEach(grp => {
-      const n = grp.verts.length / 3;
-      allVerts.push(...grp.verts);
-      allNorms.push(...grp.normals);
-      allUVs.push(...grp.uvs);
-      grp.indices.forEach(i => allIdx.push(i + offset));
-      offset += n;
-    });
-    return { name: 'displacement', material: lastData.groups[0]?.material || '', verts: allVerts, normals: allNorms, uvs: allUVs, indices: allIdx };
-  }
+    // Resolve texture filename for MTL
+    const texLeaf = vmt['$basetexture'] ? leafNoExt(vmt['$basetexture']) : matLeaf;
+    const texFile = loadedFiles[texLeaf] || loadedFiles[matLeaf] || Object.values(loadedFiles)[0];
+    const texName = texFile ? texFile.name : `${texLeaf}.bmp`;
 
-  const exportGroups = s.scope === 'single' ? [buildSingleGroup()] : groups;
+    const { verts, normals, indices: idx } = grp;
+    const scale = s.scale || 1.0;
+    const nv    = verts.length / 3;
 
-  let totalVertsExported = 0;
+    // Build world-space UVs per vertex using same projection as viewer GLSL:
+    //   Top (XY):   u = worldPos.x * sc,  v = -worldPos.z * sc
+    //   Front (XZ): u = worldPos.x * sc,  v =  worldPos.y * sc
+    //   Side (YZ):  u = worldPos.z * sc,  v =  worldPos.y * sc
+    // Pick dominant axis per vertex from normal, same as pow(abs(n),6) blend.
+    const uvs = new Float32Array(nv * 2);
+    for (let i = 0; i < nv; i++) {
+      const wx = verts[i*3+0];  // Three.js x = Source x
+      const wy = verts[i*3+1];  // Three.js y = Source z (up)
+      const wz = verts[i*3+2];  // Three.js z = -Source y
 
-  exportGroups.forEach(grp => {
-    const leaf    = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop() : 'displacement';
-    const matName = leaf;
-    const texFile = loadedFiles[leaf.toLowerCase()];
-    const texName = texFile ? texFile.name : `${leaf}.bmp`;
-    const sz      = loadedSizes[leaf.toLowerCase()];
-
-    // MTL
-    if (s.includeMtl) {
-      const mtl = [`newmtl ${matName}`, `Ka 1.000 1.000 1.000`, `Kd 1.000 1.000 1.000`, `Ks 0.000 0.000 0.000`, `map_Kd ${texName}`, ``].join('\n');
-      dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
+      let u, v;
+      if (sc > 0) {
+        const nx = Math.abs(normals[i*3+0]);
+        const ny = Math.abs(normals[i*3+1]);
+        const nz = Math.abs(normals[i*3+2]);
+        if (ny >= nx && ny >= nz) {
+          // Top face (Y up dominant) — XZ plane in Three.js = XY in Source
+          u =  wx * sc;
+          v = -wz * sc;
+        } else if (nz >= nx) {
+          // Front/back (Z dominant)
+          u = wx * sc;
+          v = wy * sc;
+        } else {
+          // Side (X dominant)
+          u = -wz * sc;
+          v =  wy * sc;
+        }
+      } else {
+        // No seamless scale — fall back to raw VMF UVs
+        u = grp.uvs[i*2];
+        v = grp.uvs[i*2+1];
+      }
+      uvs[i*2]   = u;
+      uvs[i*2+1] = v;
     }
 
-    const { verts, normals, uvs, indices: idx } = grp;
-    const maxVerts = s.splitMeshes ? s.splitVerts : Infinity;
-
-    const chunks = [];
-    let cur = null;
-    const vertMap = new Map();
+    // Build OBJ chunks (respects split-mesh setting)
+    const maxVerts  = s.splitMeshes ? s.splitVerts : Infinity;
+    const chunks    = [];
+    let   cur       = null;
+    const vertMap   = new Map();
 
     for (let t = 0; t < idx.length; t += 3) {
-      const tri = [idx[t], idx[t+1], idx[t+2]];
+      const tri     = [idx[t], idx[t+1], idx[t+2]];
       const newVerts = tri.filter(v => !vertMap.has(v));
-      if (!cur || cur.localVerts.length / 3 + newVerts.length > maxVerts) {
-        cur = { localVerts: [], localNormals: [], localUVs: [], localIdx: [] };
+      if (!cur || cur.lv.length / 3 + newVerts.length > maxVerts) {
+        cur = { lv: [], lu: [], ln: [], li: [] };
         chunks.push(cur);
         vertMap.clear();
       }
       const face = tri.map(gv => {
         if (!vertMap.has(gv)) {
-          const li = cur.localVerts.length / 3;
+          const li = cur.lv.length / 3;
           vertMap.set(gv, li);
-          const sc = s.scale;
-          cur.localVerts.push(verts[gv*3]*sc, verts[gv*3+1]*sc, verts[gv*3+2]*sc);
-          cur.localNormals.push(normals[gv*3], normals[gv*3+1], normals[gv*3+2]);
-          const u = sz ? uvs[gv*2]   / sz.w : uvs[gv*2];
-          const v = sz ? 1 - (uvs[gv*2+1] / sz.h) : uvs[gv*2+1];
-          cur.localUVs.push(u, v);
+          cur.lv.push(verts[gv*3]*scale, verts[gv*3+1]*scale, verts[gv*3+2]*scale);
+          cur.lu.push(uvs[gv*2], uvs[gv*2+1]);
+          cur.ln.push(normals[gv*3], normals[gv*3+1], normals[gv*3+2]);
         }
         return vertMap.get(gv);
       });
-      cur.localIdx.push(...face);
+      cur.li.push(...face);
     }
 
+    // MTL
+    if (s.includeMtl) {
+      const mtl = [
+        `newmtl ${matLeaf}`,
+        'Ka 1.000 1.000 1.000',
+        'Kd 1.000 1.000 1.000',
+        'Ks 0.000 0.000 0.000',
+        `map_Kd ${texName}`,
+      ].join('\n') + '\n';
+      dl(new Blob([mtl], {type:'text/plain'}), `${grp.name}.mtl`);
+    }
+
+    // Texture file
+    if (s.includeTex && texFile) dl(texFile, texName);
+
+    // OBJ chunks
     chunks.forEach((chunk, ci) => {
-      totalVertsExported += chunk.localVerts.length / 3;
       const suffix = chunks.length > 1 ? `_part${ci+1}` : '';
       const name   = `${grp.name}${suffix}`;
       const lines  = [];
       if (s.includeMtl) lines.push(`mtllib ${grp.name}.mtl`);
       lines.push(`o ${name}`, '');
-      for (let i = 0; i < chunk.localVerts.length;   i += 3) lines.push(`v ${chunk.localVerts[i].toFixed(4)} ${chunk.localVerts[i+1].toFixed(4)} ${chunk.localVerts[i+2].toFixed(4)}`);
+      for (let i = 0; i < chunk.lv.length; i += 3)
+        lines.push(`v ${chunk.lv[i].toFixed(4)} ${chunk.lv[i+1].toFixed(4)} ${chunk.lv[i+2].toFixed(4)}`);
       lines.push('');
-      for (let i = 0; i < chunk.localUVs.length;     i += 2) lines.push(`vt ${chunk.localUVs[i].toFixed(6)} ${chunk.localUVs[i+1].toFixed(6)}`);
+      for (let i = 0; i < chunk.lu.length; i += 2)
+        lines.push(`vt ${chunk.lu[i].toFixed(6)} ${chunk.lu[i+1].toFixed(6)}`);
       if (s.exportNorms) {
         lines.push('');
-        for (let i = 0; i < chunk.localNormals.length; i += 3) lines.push(`vn ${chunk.localNormals[i].toFixed(6)} ${chunk.localNormals[i+1].toFixed(6)} ${chunk.localNormals[i+2].toFixed(6)}`);
+        for (let i = 0; i < chunk.ln.length; i += 3)
+          lines.push(`vn ${chunk.ln[i].toFixed(6)} ${chunk.ln[i+1].toFixed(6)} ${chunk.ln[i+2].toFixed(6)}`);
       }
       lines.push('');
-      if (s.includeMtl) lines.push(`usemtl ${matName}`);
+      if (s.includeMtl) lines.push(`usemtl ${matLeaf}`);
       if (s.exportNorms) {
-        for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`); }
+        for (let i = 0; i < chunk.li.length; i += 3) {
+          const a=chunk.li[i]+1, b=chunk.li[i+1]+1, c=chunk.li[i+2]+1;
+          lines.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`);
+        }
       } else {
-        for (let i = 0; i < chunk.localIdx.length; i += 3) { const a=chunk.localIdx[i]+1,b=chunk.localIdx[i+1]+1,c=chunk.localIdx[i+2]+1; lines.push(`f ${a}/${a} ${b}/${b} ${c}/${c}`); }
+        for (let i = 0; i < chunk.li.length; i += 3) {
+          const a=chunk.li[i]+1, b=chunk.li[i+1]+1, c=chunk.li[i+2]+1;
+          lines.push(`f ${a}/${a} ${b}/${b} ${c}/${c}`);
+        }
       }
       dl(new Blob([lines.join('\n')], {type:'text/plain'}), `${name}.obj`);
     });
-
-    if (s.includeTex && texFile) dl(texFile, texName);
   });
+}
 
-  if (totalVertsExported > s.warnVerts)
-    alert(`Warning: total exported verts (${totalVertsExported.toLocaleString()}) exceeds limit of ${s.warnVerts.toLocaleString()}. You may need to split into multiple models.`);
+// ── Export ────────────────────────────────────────────────────────────────────
+function _grpIsBlend(grp) {
+  const matLeaf = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop().toLowerCase() : '';
+  const vmt = vmtByLeaf[matLeaf] || {};
+  return !!(vmt['$basetexture2'] && parseFloat(vmt['$seamless_scale'] || 0) > 0);
+}
+
+function _seamlessUVs(grp) {
+  const matLeaf = grp.material ? grp.material.replace(/\\/g,'/').split('/').pop().toLowerCase() : '';
+  const vmt  = vmtByLeaf[matLeaf] || {};
+  const sc   = parseFloat(vmt['$seamless_scale'] || 0) || 0;
+  const { verts, normals } = grp;
+  const nv   = verts.length / 3;
+  const uvs  = new Float32Array(nv * 2);
+  for (let i = 0; i < nv; i++) {
+    const wx = verts[i*3], wy = verts[i*3+1], wz = verts[i*3+2];
+    let u, v;
+    if (sc > 0) {
+      const ax = Math.abs(normals[i*3]), ay = Math.abs(normals[i*3+1]), az = Math.abs(normals[i*3+2]);
+      if (ay >= ax && ay >= az)   { u =  wx*sc; v = -wz*sc; }
+      else if (az >= ax)          { u =  wx*sc; v =  wy*sc; }
+      else                        { u = -wz*sc; v =  wy*sc; }
+    } else {
+      // No VMT loaded — use world-space position with a sane default scale
+      // (1 texture repeat per 128 Source units, matching typical GoldSrc tile size)
+      const DEFAULT_SC = 1 / 128;
+      const ax = Math.abs(normals[i*3]), ay = Math.abs(normals[i*3+1]), az = Math.abs(normals[i*3+2]);
+      if (ay >= ax && ay >= az)   { u =  wx*DEFAULT_SC; v = -wz*DEFAULT_SC; }
+      else if (az >= ax)          { u =  wx*DEFAULT_SC; v =  wy*DEFAULT_SC; }
+      else                        { u = -wz*DEFAULT_SC; v =  wy*DEFAULT_SC; }
+    }
+    uvs[i*2] = u; uvs[i*2+1] = v;
+  }
+  return { uvs, matLeaf, vmt };
+}
+
+// ── Client-side triplanar texture sampling ────────────────────────────────────
+const _imgDataCache = new Map();
+async function _getImageData(file) {
+  if (!file) return null;
+  if (_imgDataCache.has(file.name)) return _imgDataCache.get(file.name);
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
+  });
+  const cv = document.createElement('canvas');
+  cv.width = img.naturalWidth || 512; cv.height = img.naturalHeight || 512;
+  cv.getContext('2d').drawImage(img, 0, 0);
+  const idata = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height);
+  _imgDataCache.set(file.name, idata);
+  return idata;
+}
+
+function _sampleRepeat(idata, u, v) {
+  if (!idata) return [0.8, 0.8, 0.8];
+  const w = idata.width, h = idata.height;
+  u = ((u % 1) + 1) % 1;
+  v = ((v % 1) + 1) % 1;
+  const px = Math.floor(u * w) % w;
+  const py = Math.floor(v * h) % h;
+  const i = (py * w + px) * 4;
+  return [idata.data[i]/255, idata.data[i+1]/255, idata.data[i+2]/255];
+}
+
+// Exact same triplanar logic as the viewer GLSL
+function _triplanarRGB(idata, wx, wy, wz, nx, ny, nz, sc) {
+  const ax = Math.abs(nx)**6, ay = Math.abs(ny)**6, az = Math.abs(nz)**6;
+  const tot = ax + ay + az || 1;
+  const wt = ay/tot, wf = az/tot, ws = ax/tot;
+  const ct = _sampleRepeat(idata,  wx*sc, -wz*sc);
+  const cf = _sampleRepeat(idata,  wx*sc,  wy*sc);
+  const cs = _sampleRepeat(idata, -wz*sc,  wy*sc);
+  return [ct[0]*wt+cf[0]*wf+cs[0]*ws, ct[1]*wt+cf[1]*wf+cs[1]*ws, ct[2]*wt+cf[2]*wf+cs[2]*ws];
+}
+
+async function _buildAndDownloadZip(objStr, mtlStr, texMap, baseName, setupPy) {
+  const zip = new JSZip();
+  zip.file(`${baseName}.obj`, objStr);
+  zip.file(`${baseName}.mtl`, mtlStr);
+  for (const [name, file] of texMap) zip.file(name, file);
+  if (setupPy) zip.file('setup_material.py', setupPy);
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${baseName}_export.zip`;
+  a.click();
+}
+
+// ── Triplanar OBJ export + Blender shader script ──────────────────────────────
+
+async function _triplanarExport(visibleGroups, baseName, s) {
+  const zip = new JSZip();
+  const sc2 = s.scale || 1;
+
+  // ── Collect per-material texture info and add original files to zip ────────
+  const matInfos = {}; // matLeaf → {scale, tex1, tex2, isBlend}
+  for (const grp of visibleGroups) {
+    const ml = grp.material ? leafNoExt(grp.material) : '__none__';
+    if (matInfos[ml]) continue;
+    const vmt   = vmtByLeaf[ml] || {};
+    const sc    = parseFloat(vmt['$seamless_scale'] || 0) || 0;
+    const leaf1 = vmt['$basetexture']  ? leafNoExt(vmt['$basetexture'])  : ml;
+    const leaf2 = vmt['$basetexture2'] ? leafNoExt(vmt['$basetexture2']) : null;
+    const f1    = loadedFiles[leaf1] || loadedFiles[ml] || null;
+    const f2    = leaf2 ? (loadedFiles[leaf2] || null) : null;
+    const n1    = f1 ? f1.name.split(/[/\\]/).pop() : null;
+    const n2    = f2 ? f2.name.split(/[/\\]/).pop() : null;
+    if (f1) zip.file(n1, await f1.arrayBuffer());
+    if (f2 && n2 && n2 !== n1) zip.file(n2, await f2.arrayBuffer());
+    matInfos[ml] = { scale: sc, tex1: n1, tex2: n2, isBlend: !!leaf2 };
+  }
+
+  // ── Build OBJ with vertex colors encoding blend alpha (v x y z a a a) ─────
+  const objLines = [`# Displacer — ${baseName}`, `mtllib ${baseName}.mtl`, ''];
+  const mtlLines = [`# ${baseName}`, ''];
+  const addedMats = new Set();
+  let vOff = 0;
+
+  for (const grp of visibleGroups) {
+    const ml      = grp.material ? leafNoExt(grp.material) : '__none__';
+    const matName = ml === '__none__' ? 'displacement' : ml;
+    const info    = matInfos[ml] || {};
+    const { verts, normals, alphas } = grp;
+    const idxArr  = Array.isArray(grp.indices) ? grp.indices : Array.from(grp.indices);
+    const nv      = verts.length / 3;
+
+    objLines.push(`o ${matName}`);
+    for (let i = 0; i < nv; i++) {
+      const a = ((alphas?.[i]) ?? 0).toFixed(4);
+      objLines.push(`v ${(verts[i*3]*sc2).toFixed(4)} ${(verts[i*3+1]*sc2).toFixed(4)} ${(verts[i*3+2]*sc2).toFixed(4)} ${a} ${a} ${a}`);
+    }
+    for (let i = 0; i < nv; i++)
+      objLines.push(`vn ${normals[i*3].toFixed(6)} ${normals[i*3+1].toFixed(6)} ${normals[i*3+2].toFixed(6)}`);
+    objLines.push(`usemtl ${matName}`);
+    for (let t = 0; t < idxArr.length; t += 3) {
+      const a = idxArr[t]+1+vOff, b = idxArr[t+1]+1+vOff, c = idxArr[t+2]+1+vOff;
+      objLines.push(`f ${a}//${a} ${b}//${b} ${c}//${c}`);
+    }
+    objLines.push('');
+
+    if (!addedMats.has(matName)) {
+      addedMats.add(matName);
+      mtlLines.push(`newmtl ${matName}`);
+      if (info.tex1) mtlLines.push(`map_Kd ${info.tex1}`);
+      else           mtlLines.push('Kd 0.55 0.55 0.55');
+      mtlLines.push('');
+    }
+    vOff += nv;
+  }
+
+  zip.file(`${baseName}.obj`, objLines.join('\n'));
+  zip.file(`${baseName}.mtl`, mtlLines.join('\n'));
+
+  // ── Generate setup_material.py — builds triplanar Blender shader nodes ─────
+  const mJson = JSON.stringify(matInfos, null, 2);
+  const py = `# setup_material.py — generated by Displacer
+# 1. Import the OBJ: File > Import > Wavefront (.obj)
+#      Forward Axis: -Z   Up Axis: Y   (tick "Import vertex colors")
+# 2. Open this script in Blender's Scripting tab and click Run Script.
+import bpy, os, json
+
+MATERIALS = json.loads(r"""
+${mJson}
+""")
+
+# Resolve script directory: prefer the location of this .py file itself,
+# so textures in the same extracted zip folder are found automatically.
+try:
+    _txt = bpy.context.space_data.text
+    script_dir = os.path.dirname(os.path.abspath(_txt.filepath)) if (_txt and _txt.filepath) else ''
+except Exception:
+    script_dir = ''
+if not script_dir:
+    script_dir = os.path.dirname(bpy.data.filepath) if bpy.data.filepath else os.getcwd()
+print(f"script_dir = {script_dir}")
+
+def load_img(name):
+    if not name: return None
+    # Check already-loaded images first
+    for img in bpy.data.images:
+        if os.path.basename(img.filepath) == name: return img
+    # Try script dir (same folder as the extracted zip)
+    for d in [script_dir, os.getcwd()]:
+        path = os.path.join(d, name)
+        if os.path.exists(path):
+            img = bpy.data.images.load(path)
+            img.colorspace_settings.name = 'sRGB'
+            return img
+    return None
+
+def build(mat_name, info):
+    mat = bpy.data.materials.get(mat_name)
+    if not mat:
+        print(f"  skip (not found): {mat_name}"); return
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+
+    out  = nt.nodes.new('ShaderNodeOutputMaterial')
+    bsdf = nt.nodes.new('ShaderNodeBsdfPrincipled')
+    bsdf.inputs['Roughness'].default_value = 1.0
+    for k in ('Specular IOR Level', 'Specular'):
+        try: bsdf.inputs[k].default_value = 0.0; break
+        except: pass
+    nt.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+
+    sc = info['scale'] if info['scale'] else 0.002
+
+    geo     = nt.nodes.new('ShaderNodeNewGeometry')
+    sep_pos = nt.nodes.new('ShaderNodeSeparateXYZ')
+    sep_nor = nt.nodes.new('ShaderNodeSeparateXYZ')
+    nt.links.new(geo.outputs['Position'], sep_pos.inputs['Vector'])
+    nt.links.new(geo.outputs['Normal'],   sep_nor.inputs['Vector'])
+
+    def make_uv(px, py):
+        cx = nt.nodes.new('ShaderNodeMath'); cx.operation = 'MULTIPLY'; cx.inputs[1].default_value = sc
+        cy = nt.nodes.new('ShaderNodeMath'); cy.operation = 'MULTIPLY'; cy.inputs[1].default_value = sc
+        nt.links.new(px, cx.inputs[0]); nt.links.new(py, cy.inputs[0])
+        cv = nt.nodes.new('ShaderNodeCombineXYZ')
+        nt.links.new(cx.outputs[0], cv.inputs['X']); nt.links.new(cy.outputs[0], cv.inputs['Y'])
+        return cv.outputs['Vector']
+
+    # Blender coords after Forward=-Z Up=Y import:
+    #   Blender X = SourceX,  Y = SourceY,  Z = SourceZ (up)
+    # Matches viewer triplanar GLSL exactly:
+    #   top   (Z-dominant, ceiling/floor): UV=(X,Y)  weight=|Nz|^6
+    #   side  (X-dominant, side walls):    UV=(Y,Z)  weight=|Nx|^6
+    #   front (Y-dominant, slopes):        UV=(X,Z)  weight=|Ny|^6
+    uv_top   = make_uv(sep_pos.outputs['X'], sep_pos.outputs['Y'])
+    uv_side  = make_uv(sep_pos.outputs['Y'], sep_pos.outputs['Z'])
+    uv_front = make_uv(sep_pos.outputs['X'], sep_pos.outputs['Z'])
+
+    def w6(comp):
+        ab = nt.nodes.new('ShaderNodeMath'); ab.operation = 'ABSOLUTE'
+        nt.links.new(comp, ab.inputs[0])
+        pw = nt.nodes.new('ShaderNodeMath'); pw.operation = 'POWER'; pw.inputs[1].default_value = 6.0
+        nt.links.new(ab.outputs[0], pw.inputs[0])
+        return pw.outputs[0]
+
+    wz = w6(sep_nor.outputs['Z']); wx = w6(sep_nor.outputs['X']); wy = w6(sep_nor.outputs['Y'])
+    add1 = nt.nodes.new('ShaderNodeMath'); add1.operation = 'ADD'
+    nt.links.new(wz, add1.inputs[0]); nt.links.new(wx, add1.inputs[1])
+    tot = nt.nodes.new('ShaderNodeMath'); tot.operation = 'ADD'
+    nt.links.new(add1.outputs[0], tot.inputs[0]); nt.links.new(wy, tot.inputs[1])
+
+    def ndiv(w):
+        d = nt.nodes.new('ShaderNodeMath'); d.operation = 'DIVIDE'
+        nt.links.new(w, d.inputs[0]); nt.links.new(tot.outputs[0], d.inputs[1])
+        return d.outputs[0]
+
+    nwz = ndiv(wz); nwx = ndiv(wx); nwy = ndiv(wy)
+
+    def tex_at(img, uv):
+        t = nt.nodes.new('ShaderNodeTexImage')
+        t.image = img; t.extension = 'REPEAT'; t.interpolation = 'Linear'
+        nt.links.new(uv, t.inputs['Vector'])
+        return t.outputs['Color']
+
+    def wmul(col, w):
+        cb = nt.nodes.new('ShaderNodeCombineXYZ')
+        nt.links.new(w, cb.inputs['X']); nt.links.new(w, cb.inputs['Y']); nt.links.new(w, cb.inputs['Z'])
+        vm = nt.nodes.new('ShaderNodeVectorMath'); vm.operation = 'MULTIPLY'
+        nt.links.new(col, vm.inputs[0]); nt.links.new(cb.outputs['Vector'], vm.inputs[1])
+        return vm.outputs['Vector']
+
+    def wadd(a, b):
+        vm = nt.nodes.new('ShaderNodeVectorMath'); vm.operation = 'ADD'
+        nt.links.new(a, vm.inputs[0]); nt.links.new(b, vm.inputs[1])
+        return vm.outputs['Vector']
+
+    def triplanar(img):
+        ct = tex_at(img, uv_top); cs = tex_at(img, uv_side); cf = tex_at(img, uv_front)
+        return wadd(wadd(wmul(ct, nwz), wmul(cs, nwx)), wmul(cf, nwy))
+
+    img1 = load_img(info['tex1'])
+    img2 = load_img(info.get('tex2')) if info.get('isBlend') else None
+    print(f"  tex1={info['tex1']} loaded={img1 is not None}  isBlend={info.get('isBlend')}  tex2={info.get('tex2')} loaded={img2 is not None}")
+
+    if img1:
+        col1 = triplanar(img1)
+    else:
+        rgb = nt.nodes.new('ShaderNodeRGB'); rgb.outputs[0].default_value = (0.55,0.55,0.55,1.0)
+        col1 = rgb.outputs['Color']
+
+    if img2:
+        col2 = triplanar(img2)
+        # Auto-detect vertex color attribute name (varies by Blender version/importer)
+        vc_name = 'Col'
+        if hasattr(mat, 'node_tree'):
+            for o in bpy.data.objects:
+                if o.type == 'MESH' and any(s.material == mat for s in o.material_slots):
+                    for a in o.data.attributes:
+                        if a.domain == 'POINT' and a.data_type in ('FLOAT_COLOR','BYTE_COLOR','FLOAT2'):
+                            vc_name = a.name
+                            break
+                    break
+        print(f"  blend: using vertex-color attribute '{vc_name}'")
+        attr = nt.nodes.new('ShaderNodeAttribute'); attr.attribute_name = vc_name
+        try:
+            sep = nt.nodes.new('ShaderNodeSeparateColor')
+            nt.links.new(attr.outputs['Color'], sep.inputs['Color'])
+            fac = sep.outputs['Red']
+        except Exception:
+            sep = nt.nodes.new('ShaderNodeSeparateRGB')
+            nt.links.new(attr.outputs['Color'], sep.inputs['Image'])
+            fac = sep.outputs['R']
+        mix = nt.nodes.new('ShaderNodeMixRGB'); mix.blend_type = 'MIX'
+        nt.links.new(fac,  mix.inputs[0])
+        nt.links.new(col1, mix.inputs[1])
+        nt.links.new(col2, mix.inputs[2])
+        final = mix.outputs['Color']
+    else:
+        final = col1
+
+    nt.links.new(final, bsdf.inputs['Base Color'])
+    print(f"  OK: {mat_name}")
+
+print("Setting up triplanar materials...")
+print(f"MATERIALS keys: {list(MATERIALS.keys())}")
+
+matched = 0
+for mat in bpy.data.materials:
+    # Match exact name, or strip Blender's .001/.002 duplicate suffix
+    info = MATERIALS.get(mat.name)
+    if info is None:
+        base = mat.name.rsplit('.', 1)[0]
+        info = MATERIALS.get(base)
+    if info is None:
+        continue
+    print(f"Matched material: '{mat.name}'")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nt.nodes.clear()
+    out  = nt.nodes.new('ShaderNodeOutputMaterial')
+    bsdf = nt.nodes.new('ShaderNodeBsdfPrincipled')
+    bsdf.inputs['Roughness'].default_value = 1.0
+    for k in ('Specular IOR Level', 'Specular'):
+        try: bsdf.inputs[k].default_value = 0.0; break
+        except: pass
+    nt.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+    sc = info['scale'] if info['scale'] else 0.002
+    geo = nt.nodes.new('ShaderNodeNewGeometry')
+    sep_pos = nt.nodes.new('ShaderNodeSeparateXYZ')
+    sep_nor = nt.nodes.new('ShaderNodeSeparateXYZ')
+    nt.links.new(geo.outputs['Position'], sep_pos.inputs['Vector'])
+    nt.links.new(geo.outputs['Normal'],   sep_nor.inputs['Vector'])
+    def make_uv(px, py):
+        cx = nt.nodes.new('ShaderNodeMath'); cx.operation = 'MULTIPLY'; cx.inputs[1].default_value = sc
+        cy = nt.nodes.new('ShaderNodeMath'); cy.operation = 'MULTIPLY'; cy.inputs[1].default_value = sc
+        nt.links.new(px, cx.inputs[0]); nt.links.new(py, cy.inputs[0])
+        cv = nt.nodes.new('ShaderNodeCombineXYZ')
+        nt.links.new(cx.outputs[0], cv.inputs['X']); nt.links.new(cy.outputs[0], cv.inputs['Y'])
+        return cv.outputs['Vector']
+    uv_top   = make_uv(sep_pos.outputs['X'], sep_pos.outputs['Y'])
+    uv_side  = make_uv(sep_pos.outputs['Y'], sep_pos.outputs['Z'])
+    uv_front = make_uv(sep_pos.outputs['X'], sep_pos.outputs['Z'])
+    def w6(comp):
+        ab = nt.nodes.new('ShaderNodeMath'); ab.operation = 'ABSOLUTE'
+        nt.links.new(comp, ab.inputs[0])
+        pw = nt.nodes.new('ShaderNodeMath'); pw.operation = 'POWER'; pw.inputs[1].default_value = 6.0
+        nt.links.new(ab.outputs[0], pw.inputs[0])
+        return pw.outputs[0]
+    wz = w6(sep_nor.outputs['Z']); wx = w6(sep_nor.outputs['X']); wy = w6(sep_nor.outputs['Y'])
+    add1 = nt.nodes.new('ShaderNodeMath'); add1.operation = 'ADD'
+    nt.links.new(wz, add1.inputs[0]); nt.links.new(wx, add1.inputs[1])
+    tot = nt.nodes.new('ShaderNodeMath'); tot.operation = 'ADD'
+    nt.links.new(add1.outputs[0], tot.inputs[0]); nt.links.new(wy, tot.inputs[1])
+    def ndiv(w):
+        d = nt.nodes.new('ShaderNodeMath'); d.operation = 'DIVIDE'
+        nt.links.new(w, d.inputs[0]); nt.links.new(tot.outputs[0], d.inputs[1])
+        return d.outputs[0]
+    nwz = ndiv(wz); nwx = ndiv(wx); nwy = ndiv(wy)
+    def tex_at(img, uv):
+        t = nt.nodes.new('ShaderNodeTexImage')
+        t.image = img; t.extension = 'REPEAT'; t.interpolation = 'Linear'
+        nt.links.new(uv, t.inputs['Vector'])
+        return t.outputs['Color']
+    def wmul(col, w):
+        cb = nt.nodes.new('ShaderNodeCombineXYZ')
+        nt.links.new(w, cb.inputs['X']); nt.links.new(w, cb.inputs['Y']); nt.links.new(w, cb.inputs['Z'])
+        vm = nt.nodes.new('ShaderNodeVectorMath'); vm.operation = 'MULTIPLY'
+        nt.links.new(col, vm.inputs[0]); nt.links.new(cb.outputs['Vector'], vm.inputs[1])
+        return vm.outputs['Vector']
+    def wadd(a, b):
+        vm = nt.nodes.new('ShaderNodeVectorMath'); vm.operation = 'ADD'
+        nt.links.new(a, vm.inputs[0]); nt.links.new(b, vm.inputs[1])
+        return vm.outputs['Vector']
+    def triplanar(img):
+        ct = tex_at(img, uv_top); cs = tex_at(img, uv_side); cf = tex_at(img, uv_front)
+        return wadd(wadd(wmul(ct, nwz), wmul(cs, nwx)), wmul(cf, nwy))
+    img1 = load_img(info['tex1'])
+    img2 = load_img(info.get('tex2')) if info.get('isBlend') else None
+    print(f"  tex1={info['tex1']} found={img1 is not None}  isBlend={info.get('isBlend')}  tex2={info.get('tex2')} found={img2 is not None}")
+    if img1:
+        col1 = triplanar(img1)
+    else:
+        rgb = nt.nodes.new('ShaderNodeRGB'); rgb.outputs[0].default_value = (0.55,0.55,0.55,1.0)
+        col1 = rgb.outputs['Color']
+    if img2:
+        col2 = triplanar(img2)
+        vc_name = 'Col'
+        for o in bpy.data.objects:
+            if o.type == 'MESH' and any(s.material == mat for s in o.material_slots):
+                for a in o.data.attributes:
+                    if a.domain == 'POINT' and a.data_type in ('FLOAT_COLOR','BYTE_COLOR'):
+                        vc_name = a.name; break
+                break
+        print(f"  vertex color attribute: '{vc_name}'")
+        attr = nt.nodes.new('ShaderNodeAttribute'); attr.attribute_name = vc_name
+        try:
+            sep = nt.nodes.new('ShaderNodeSeparateColor')
+            nt.links.new(attr.outputs['Color'], sep.inputs['Color'])
+            fac = sep.outputs['Red']
+        except Exception:
+            sep = nt.nodes.new('ShaderNodeSeparateRGB')
+            nt.links.new(attr.outputs['Color'], sep.inputs['Image'])
+            fac = sep.outputs['R']
+        mix = nt.nodes.new('ShaderNodeMixRGB'); mix.blend_type = 'MIX'
+        nt.links.new(fac,  mix.inputs[0])
+        nt.links.new(col1, mix.inputs[1])
+        nt.links.new(col2, mix.inputs[2])
+        final = mix.outputs['Color']
+    else:
+        final = col1
+    nt.links.new(final, bsdf.inputs['Base Color'])
+    matched += 1
+
+print(f"Done! Set up {matched} material(s).")
+`;
+
+  zip.file('setup_material.py', py);
+  zip.file('README.txt',
+    'Displacer export — triplanar shader setup\n' +
+    '==========================================\n\n' +
+    '1. In Blender: File > Import > Wavefront (.obj)\n' +
+    '     Forward Axis: -Z   Up Axis: Y\n' +
+    '     Enable "Import vertex colors" in the import options\n\n' +
+    '2. Open setup_material.py in Blender Scripting tab\n' +
+    '   Make sure your .blend file is SAVED in the same folder as the textures,\n' +
+    '   or just open the script and click Run Script (textures are auto-found by filename)\n\n' +
+    '3. Switch to Cycles or EEVEE — the triplanar shader uses world-space\n' +
+    '   position/normal to tile textures seamlessly, identical to the viewer.\n\n' +
+    'For WorldVertexTransition (blend) materials, vertex colors encode the blend\n' +
+    'alpha (0 = tex1, 1 = tex2). This is automatically used by setup_material.py.\n'
+  );
+
+  // ── Download ──────────────────────────────────────────────────────────────
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${baseName}_export.zip`;
+  a.click();
+}
+
+document.getElementById('btn-export').addEventListener('click', async () => {
+  if (!lastData) return;
+  const s        = getExportSettings();
+  const baseName = (lastData.filename || 'terrain').replace(/\.vmf$/i, '');
+  const btn      = document.getElementById('btn-export');
+
+  const visibleGroups = lastData.groups.filter((_, i) => groupMeshes[i]?.visible !== false);
+  if (!visibleGroups.length) return;
+
+  btn.textContent = 'Exporting…';
+  btn.disabled = true;
+  try {
+    await _triplanarExport(visibleGroups, baseName, s);
+  } finally {
+    btn.textContent = 'Export OBJ';
+    btn.disabled = false;
+  }
 });
 
 // ── Tile Picker ───────────────────────────────────────────────────────────────
@@ -1758,43 +2297,37 @@ document.getElementById('btn-start-bake').addEventListener('click', async () => 
   btn.disabled = true;
   btn.textContent = 'Baking…';
   bakeStatus.style.color = '#f7a04a';
-  bakeStatus.textContent = 'Sending to server…';
+  bakeStatus.textContent = 'Starting…';
 
   const form = new FormData();
-  bakeVmtFiles.forEach(f  => form.append('vmts',     f));
-  bakeTexFiles.forEach(f  => form.append('textures', f));
+  bakeVmtFiles.forEach(f => form.append('vmts',     f));
+  bakeTexFiles.forEach(f => form.append('textures', f));
   form.append('resolution', document.getElementById('bake-resolution').value);
+  form.append('filename', lastData?.filename || 'terrain');
 
-  try {
-    const res = await fetch('/bake', { method: 'POST', body: form });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
+  await _runBakeSSE(form, {
+    onProgress: msg => {
+      bakeStatus.style.color = '#f7a04a';
+      bakeStatus.textContent = msg;
+    },
+    onDone: (blob, filename) => {
+      bakeStatus.style.color = '#7adf7a';
+      bakeStatus.textContent = 'Done! Downloading…';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      btn.disabled = false;
+      btn.textContent = 'Start Bake';
+      setTimeout(() => { bakeStatus.textContent = ''; bakeModal.classList.remove('open'); }, 2000);
+    },
+    onError: err => {
       bakeStatus.style.color = '#f74a4a';
-      bakeStatus.textContent = 'Error: ' + (err.error || res.statusText);
-      return;
-    }
-
-    bakeStatus.style.color = '#7adf7a';
-    bakeStatus.textContent = 'Done! Downloading ZIP…';
-
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = (lastData?.filename?.replace('.vmf','') || 'terrain') + '_baked.zip';
-    a.click();
-
-    setTimeout(() => {
-      bakeStatus.textContent = '';
-      bakeModal.classList.remove('open');
-    }, 2000);
-  } catch (e) {
-    bakeStatus.style.color = '#f74a4a';
-    bakeStatus.textContent = 'Network error: ' + e.message;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Start Bake';
-  }
+      bakeStatus.textContent = 'Error: ' + err;
+      btn.disabled = false;
+      btn.textContent = 'Start Bake';
+    },
+  });
 });
 
 // ── Import modal ──────────────────────────────────────────────────────────────

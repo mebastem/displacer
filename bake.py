@@ -41,11 +41,24 @@ def _arr(img: 'Image.Image') -> 'np.ndarray':
 
 
 def _sample(arr: 'np.ndarray', u: 'np.ndarray', v: 'np.ndarray') -> 'np.ndarray':
-    """Vectorised nearest-neighbour sample with repeat wrapping. Returns float32 (H,W,3)."""
+    """Vectorised bilinear sample with repeat wrapping. Returns float32 (H,W,3)."""
     h, w = arr.shape[:2]
-    px = np.floor(np.abs(u) * w).astype(np.int32) % w
-    py = np.floor(np.abs(v) * h).astype(np.int32) % h
-    return arr[py, px]  # shape (..., 3)
+    # Wrap to [0,1)
+    u = u % 1.0; u[u < 0] += 1.0
+    v = v % 1.0; v[v < 0] += 1.0
+    # Continuous pixel coords
+    fx = u * w - 0.5;  fx[fx < 0] += w
+    fy = v * h - 0.5;  fy[fy < 0] += h
+    x0 = np.floor(fx).astype(np.int32) % w
+    y0 = np.floor(fy).astype(np.int32) % h
+    x1 = (x0 + 1) % w
+    y1 = (y0 + 1) % h
+    tx = (fx - np.floor(fx))[..., np.newaxis]
+    ty = (fy - np.floor(fy))[..., np.newaxis]
+    return (arr[y0, x0] * (1 - tx) * (1 - ty) +
+            arr[y0, x1] *      tx  * (1 - ty) +
+            arr[y1, x0] * (1 - tx) *      ty  +
+            arr[y1, x1] *      tx  *      ty)
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +67,11 @@ def _sample(arr: 'np.ndarray', u: 'np.ndarray', v: 'np.ndarray') -> 'np.ndarray'
 
 def bake_groups(
     groups: List[Tuple[List[DispSide], List[Mesh]]],
-    vmt_by_leaf: Dict[str, dict],   # leaf_no_ext(mat) → parsed VMT dict
-    tex_by_leaf: Dict[str, bytes],  # leaf_no_ext(filename) → raw bytes
+    vmt_by_leaf: Dict[str, dict],
+    tex_by_leaf: Dict[str, bytes],
     resolution: int = 2048,
-) -> Tuple[List[Dict], str]:  # (results, report_text)
+    progress_cb=None,   # callable(msg: str) for live progress updates
+) -> Tuple[List[Dict], str]:
     """
     Returns one dict per group:
         name         str
@@ -77,10 +91,24 @@ def bake_groups(
         '',
     ]
 
+    def _prog(msg):
+        print(f'[bake] {msg}', flush=True)
+        if progress_cb:
+            progress_cb(msg)
+
+    # Split large groups so each sub-group gets enough atlas pixels per tile
+    MAX_TILES = 64   # 8×8 at 2048px → 256px per tile
+    flat: List[Tuple[List, List]] = []
+    for tiles, meshes in groups:
+        for i in range(0, max(1, len(tiles)), MAX_TILES):
+            flat.append((tiles[i:i+MAX_TILES], meshes[i:i+MAX_TILES]))
+
+    _prog(f'Starting bake: {len(flat)} sub-group(s) (from {len(groups)} proximity group(s))')
     results = []
 
-    for gi, (tiles, meshes) in enumerate(groups):
+    for gi, (tiles, meshes) in enumerate(flat):
         name = f'terrain_group_{gi}'
+        _prog(f'Sub-group {gi+1}/{len(flat)}: resolving material ({len(tiles)} tiles)…')
 
         # --- resolve material & VMT ---
         from collections import Counter
@@ -124,42 +152,59 @@ def bake_groups(
         cols = max(1, math.ceil(math.sqrt(N)))
         rows = max(1, math.ceil(N / cols))
 
-        diffuse_out = np.full((resolution, resolution, 3), 64,          dtype=np.float32)
-        normal_out  = np.full((resolution, resolution, 3), [128,128,255], dtype=np.float32) \
+        # Each tile gets at least 128px but atlas is capped at 4096
+        tile_px  = max(128, min(512, resolution // max(cols, rows)))
+        auto_res = min(4096, max(resolution, cols * tile_px, rows * tile_px))
+        # Round up to next power of two
+        auto_res = 1 << (auto_res - 1).bit_length()
+        res = auto_res
+        report_lines.append(f'  Atlas resolution: {res}px ({cols}×{rows} tile grid, ~{res//cols}px/tile)')
+
+        diffuse_out = np.full((res, res, 3), 64,          dtype=np.float32)
+        normal_out  = np.full((res, res, 3), [128,128,255], dtype=np.float32) \
                       if has_normal else None
 
+        _prog(f'Sub-group {gi+1}/{len(flat)}: atlas {res}px, sampling {len(tiles)} tiles…')
         tile_uvs_list: List[List[Tuple[float, float]]] = []
 
         for ti, (ds, mesh) in enumerate(zip(tiles, meshes)):
+            if ti % 50 == 0:
+                _prog(f'Sub-group {gi+1}/{len(flat)}: tile {ti+1}/{len(tiles)}…')
             size = (1 << ds.dispinfo.power) + 1
             ag   = ds.dispinfo.alphas   # [row][col] 0-255, may be empty
 
             tc, tr = ti % cols, ti // cols
             pad = 1
-            px0 = int(tc * resolution / cols) + pad
-            px1 = int((tc + 1) * resolution / cols) - pad
-            py0 = int(tr * resolution / rows) + pad
-            py1 = int((tr + 1) * resolution / rows) - pad
+            px0 = int(tc * res / cols) + pad
+            px1 = int((tc + 1) * res / cols) - pad
+            py0 = int(tr * res / rows) + pad
+            py1 = int((tr + 1) * res / rows) - pad
             px1 = max(px0 + 1, px1)
             py1 = max(py0 + 1, py1)
             pw, ph = px1 - px0, py1 - py0
 
-            # Build vertex world-position grids (Source XY for seamless UV)
-            gx = np.zeros((size, size), dtype=np.float32)
-            gy = np.zeros((size, size), dtype=np.float32)
-            ga = np.zeros((size, size), dtype=np.float32)
+            # Build vertex world-position and normal grids
+            gx  = np.zeros((size, size), dtype=np.float32)
+            gy  = np.zeros((size, size), dtype=np.float32)
+            gz  = np.zeros((size, size), dtype=np.float32)
+            gnx = np.zeros((size, size), dtype=np.float32)
+            gny = np.zeros((size, size), dtype=np.float32)
+            gnz = np.zeros((size, size), dtype=np.float32)
+            ga  = np.zeros((size, size), dtype=np.float32)
             for r in range(size):
                 for c in range(size):
-                    vx, vy, _ = mesh.verts[r * size + c]
-                    gx[r, c] = vx
-                    gy[r, c] = vy
+                    idx = r * size + c
+                    vx, vy, vz = mesh.verts[idx]
+                    nx, ny, nz = mesh.normals[idx]
+                    gx[r, c] = vx;  gy[r, c] = vy;  gz[r, c] = vz
+                    gnx[r, c] = nx; gny[r, c] = ny; gnz[r, c] = nz
                     if ag and r < len(ag) and c < len(ag[r]):
                         ga[r, c] = ag[r][c]
 
-            # Pixel-space coordinate grids → continuous grid coords
+            # Pixel-space → continuous grid coords
             lu = np.linspace(0, 1, pw, dtype=np.float32)
             lv = np.linspace(0, 1, ph, dtype=np.float32)
-            lu_g, lv_g = np.meshgrid(lu, lv)          # (ph, pw)
+            lu_g, lv_g = np.meshgrid(lu, lv)   # (ph, pw)
             gc_g = lu_g * (size - 1)
             gr_g = lv_g * (size - 1)
 
@@ -176,34 +221,55 @@ def bake_groups(
                         g[r1, c0] * (1-fc) *    fr  +
                         g[r1, c1] *    fc  *    fr)
 
-            wx = bilerp(gx)   # (ph, pw)  Source world X
-            wy = bilerp(gy)   # (ph, pw)  Source world Y
+            wx  = bilerp(gx)   # (ph, pw)  Source world X
+            wy  = bilerp(gy)   # (ph, pw)  Source world Y
+            wz  = bilerp(gz)   # (ph, pw)  Source world Z
+            wnx = bilerp(gnx)  # surface normal X
+            wny = bilerp(gny)
+            wnz = bilerp(gnz)
 
-            # Seamless UV from world position
-            if sc > 0:
-                uw = (wx * sc) % 1.0;  uw[uw < 0] += 1.0
-                vw = (wy * sc) % 1.0;  vw[vw < 0] += 1.0
-            else:
-                uw, vw = lu_g, lv_g
+            def _triplanar(arr, scale):
+                """Sample arr with triplanar projection, matching the viewer's GLSL shader."""
+                if arr is None:
+                    return np.full((ph, pw, 3), 128, dtype=np.float32)
+                if scale <= 0:
+                    return _sample(arr, lu_g, lv_g)
+                # Three projections: XY (top), XZ (front), YZ (side)
+                # Source → Blender axis swap used in viewer: (x, z, -y)
+                # Viewer GLSL: XY plane = worldPos.xz * scale (Source X, -Y=Blender Z)
+                #              XZ plane = worldPos.xy * scale
+                #              YZ plane = worldPos.zy * scale
+                s_xy = _sample(arr, wx * scale, -wy * scale)   # top face
+                s_xz = _sample(arr, wx * scale,  wz * scale)   # front face
+                s_yz = _sample(arr, wy * scale,  wz * scale)   # side face
+                # Blend weights: pow(abs(normal), 6), normalised
+                ax = np.abs(wnx) ** 6
+                ay = np.abs(wny) ** 6
+                az = np.abs(wnz) ** 6
+                total = ax + ay + az + 1e-8
+                wx_ = (ax / total)[..., np.newaxis]
+                wy_ = (ay / total)[..., np.newaxis]
+                wz_ = (az / total)[..., np.newaxis]
+                # Map viewer axes: wnz→top (XY), wny→front (XZ), wnx→side (YZ)
+                return s_xy * wz_ + s_xz * wy_ + s_yz * wx_
 
-            # Sample base texture
-            pix = _sample(t1, uw, vw) if t1 is not None \
-                  else np.full((ph, pw, 3), 128, dtype=np.float32)
+            # Sample base texture with triplanar
+            pix = _triplanar(t1, sc)
 
             # Blend with second texture using alpha grid
             if blend and t2 is not None:
                 alpha = np.clip(bilerp(ga) / 255.0, 0, 1)[:, :, np.newaxis]
-                pix2  = _sample(t2, uw, vw)
+                pix2  = _triplanar(t2, sc)
                 pix   = pix * (1 - alpha) + pix2 * alpha
 
             diffuse_out[py0:py1, px0:px1] = np.clip(pix, 0, 255)
 
             # Normal map
             if normal_out is not None:
-                npix = _sample(n1, uw, vw) if n1 is not None \
+                npix = _triplanar(n1, sc) if n1 is not None \
                        else np.full((ph, pw, 3), [128, 128, 255], dtype=np.float32)
                 if blend and n2 is not None:
-                    npix2 = _sample(n2, uw, vw)
+                    npix2 = _triplanar(n2, sc)
                     npix  = npix * (1 - alpha) + npix2 * alpha
                 normal_out[py0:py1, px0:px1] = np.clip(npix, 0, 255)
 
@@ -211,12 +277,13 @@ def bake_groups(
             uvs_for_tile = []
             for r in range(size):
                 for c in range(size):
-                    u_a = (px0 + (c / (size-1)) * pw) / resolution
-                    v_a = 1.0 - (py0 + (r / (size-1)) * ph) / resolution
+                    u_a = (px0 + (c / (size-1)) * pw) / res
+                    v_a = 1.0 - (py0 + (r / (size-1)) * ph) / res
                     uvs_for_tile.append((u_a, v_a))
             tile_uvs_list.append(uvs_for_tile)
 
         # --- encode images ---
+        _prog(f'Sub-group {gi+1}/{len(flat)}: encoding PNG…')
         def to_png(arr):
             buf = io.BytesIO()
             Image.fromarray(arr.astype(np.uint8), 'RGB').save(buf, format='PNG')
@@ -225,8 +292,10 @@ def bake_groups(
         diff_png = to_png(diffuse_out)
         norm_png = to_png(normal_out) if normal_out is not None else None
 
+        _prog(f'Sub-group {gi+1}/{len(flat)}: building OBJ…')
         obj_str, mtl_str = _build_obj(tiles, meshes, tile_uvs_list, name)
 
+        _prog(f'Sub-group {gi+1}/{len(flat)}: done ✓')
         results.append({
             'name':    name,
             'obj':     obj_str,

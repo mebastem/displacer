@@ -4,9 +4,12 @@ Flask backend: accepts a VMF upload, extracts displacements, returns geometry JS
 """
 
 import io
+import json
+import queue
+import threading
 import zipfile
 
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from vmf_disp_to_obj import (
     VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes
 )
@@ -138,17 +141,8 @@ def process():
     })
 
 
-@app.route('/bake', methods=['POST'])
-def bake():
-    global _last_vmf
-    if not _last_vmf:
-        return jsonify({'error': 'No VMF loaded — open a VMF in the viewer first'}), 400
-
-    vmt_files = request.files.getlist('vmts')
-    tex_files  = request.files.getlist('textures')
-    resolution = int(request.form.get('resolution', 2048))
-
-    # Parse VMT files
+def _prepare_bake_inputs(vmf_text, vmt_files, tex_files, resolution):
+    """Parse inputs and return (groups, vmt_by_leaf, tex_by_leaf, error_str)."""
     vmt_by_leaf = {}
     for f in vmt_files:
         try:
@@ -157,22 +151,19 @@ def bake():
         except Exception:
             pass
 
-    # Load raw texture bytes
     tex_by_leaf = {}
     for f in tex_files:
         tex_by_leaf[leaf_no_ext(f.filename)] = f.read()
 
-    # Parse VMF (from cache)
     try:
-        blocks = VMFParser(_last_vmf).parse()
+        blocks = VMFParser(vmf_text).parse()
         sides  = extract_disp_sides(blocks)
     except Exception as e:
-        return jsonify({'error': f'VMF parse error: {e}'}), 400
+        return None, None, None, f'VMF parse error: {e}'
 
     if not sides:
-        return jsonify({'error': 'No displacements found in cached VMF'}), 400
+        return None, None, None, 'No displacements found in cached VMF'
 
-    # Build per-tile meshes
     meshes, valid_sides = [], []
     for ds in sides:
         try:
@@ -182,37 +173,76 @@ def bake():
             pass
 
     if not meshes:
-        return jsonify({'error': 'No meshes could be built'}), 400
+        return None, None, None, 'No meshes could be built'
 
-    # Group by proximity (same as viewer), pick dominant material per group
-    side_map = {id(m): ds for m, ds in zip(meshes, valid_sides)}
+    side_map   = {id(m): ds for m, ds in zip(meshes, valid_sides)}
     raw_groups = group_meshes(meshes, proximity=4.0)
-    groups = [([side_map[id(m)] for m in grp], grp) for grp in raw_groups]
+    groups     = [([side_map[id(m)] for m in grp], grp) for grp in raw_groups]
+    return groups, vmt_by_leaf, tex_by_leaf, None
 
-    # Bake
-    try:
-        from bake import bake_groups
-        baked, report = bake_groups(groups, vmt_by_leaf, tex_by_leaf, resolution=resolution)
-    except Exception as e:
-        import traceback
-        return jsonify({'error': f'Bake error: {e}', 'traceback': traceback.format_exc()}), 500
 
-    # Package ZIP
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('_bake_report.txt', report)
-        for item in baked:
-            n = item['name']
-            zf.writestr(f'{n}.obj',            item['obj'])
-            zf.writestr(f'{n}.mtl',            item['mtl'])
-            zf.writestr(f'{n}_diffuse.png',    item['diffuse'])
-            if item['normal']:
-                zf.writestr(f'{n}_normal.png', item['normal'])
-    buf.seek(0)
+@app.route('/bake', methods=['POST'])
+def bake():
+    global _last_vmf
+    if not _last_vmf:
+        return jsonify({'error': 'No VMF loaded — open a VMF in the viewer first'}), 400
 
-    fname = 'baked.zip'
-    return send_file(buf, mimetype='application/zip',
-                     as_attachment=True, download_name=fname)
+    vmt_files  = request.files.getlist('vmts')
+    tex_files  = request.files.getlist('textures')
+    resolution = int(request.form.get('resolution', 2048))
+
+    groups, vmt_by_leaf, tex_by_leaf, err = _prepare_bake_inputs(
+        _last_vmf, vmt_files, tex_files, resolution)
+    if err:
+        return jsonify({'error': err}), 400
+
+    q = queue.Queue()
+
+    def run():
+        try:
+            from bake import bake_groups
+            baked, report = bake_groups(
+                groups, vmt_by_leaf, tex_by_leaf,
+                resolution=resolution,
+                progress_cb=lambda msg: q.put(('progress', msg)),
+            )
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('_bake_report.txt', report)
+                for item in baked:
+                    n = item['name']
+                    zf.writestr(f'{n}.obj',         item['obj'])
+                    zf.writestr(f'{n}.mtl',         item['mtl'])
+                    zf.writestr(f'{n}_diffuse.png', item['diffuse'])
+                    if item['normal']:
+                        zf.writestr(f'{n}_normal.png', item['normal'])
+            buf.seek(0)
+            q.put(('done', buf.getvalue()))
+        except Exception as e:
+            import traceback
+            q.put(('error', f'{e}\n{traceback.format_exc()}'))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+
+    fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_baked.zip'
+
+    @stream_with_context
+    def generate():
+        while True:
+            kind, data = q.get()
+            if kind == 'progress':
+                yield f"data: {json.dumps({'progress': data})}\n\n"
+            elif kind == 'error':
+                yield f"data: {json.dumps({'error': data})}\n\n"
+                return
+            elif kind == 'done':
+                import base64
+                yield f"data: {json.dumps({'done': True, 'filename': fname, 'zip': base64.b64encode(data).decode()})}\n\n"
+                return
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'X-Accel-Buffering': 'no', 'Cache-Control': 'no-cache'})
 
 
 if __name__ == '__main__':
