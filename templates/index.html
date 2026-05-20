@@ -1031,7 +1031,7 @@
           <option value="normalized">Normalized (÷ texture size, requires textures)</option>
         </select>
       </div>
-      <div class="smd-note" id="smd-uv-note">Raw UVs are in texel space — correct if your texture size matches the VMF face scale. Normalized divides by loaded texture dimensions to get 0–1 range.</div>
+      <div class="smd-note" id="smd-uv-note">Raw wraps UVs to 0–1 via fmod (no textures needed, tiling scale may differ). Normalized divides by loaded texture dimensions for correct tiling scale.</div>
     </div>
 
     <div class="smd-section">
@@ -3227,10 +3227,14 @@ async function _smdExport() {
       const texFile = loadedFiles[leaf1] || loadedFiles[ml] || null;
       const texName = texFile ? texFile.name.split(/[/\\]/).pop().replace(/\.[^.]+$/, '') + '.bmp' : (ml + '.bmp');
 
-      // UV normalization
-      const sz = (uvMode === 'normalized' && texFile)
-        ? (loadedSizes[leaf1] || loadedSizes[ml] || { w: 1, h: 1 })
-        : { w: 1, h: 1 };
+      // SMD UVs must be 0-1 normalized. Our raw values are in texel space.
+      // Divide by texture size if known, otherwise wrap with fmod.
+      const sz = loadedSizes[leaf1] || loadedSizes[ml] || null;
+      const uvW = (uvMode === 'normalized' && sz) ? sz.w : 0;
+      const uvH = (uvMode === 'normalized' && sz) ? sz.h : 0;
+
+      const normU = raw => uvW > 0 ? raw / uvW : (((raw % 1) + 1) % 1);
+      const normV = raw => uvH > 0 ? 1 - raw / uvH : (1 - (((raw % 1) + 1) % 1));
 
       const { verts, normals, uvs, indices, alphas } = grp;
       const idxArr = Array.isArray(indices) ? indices : Array.from(indices);
@@ -3246,9 +3250,9 @@ async function _smdExport() {
           const nx = normals[vi*3].toFixed(6);
           const ny = (-normals[vi*3+2]).toFixed(6);
           const nz = normals[vi*3+1].toFixed(6);
-          const u  = uvs[vi*2]   / sz.w;
-          const v  = 1 - uvs[vi*2+1] / sz.h; // flip V for GoldSrc
-          lines.push(`0  ${tx} ${ty} ${tz}  ${nx} ${ny} ${nz}  ${u.toFixed(6)} ${v.toFixed(6)}`);
+          const u  = normU(uvs[vi*2]   ?? 0);
+          const v  = normV(uvs[vi*2+1] ?? 0);
+          lines.push(`0 ${tx} ${ty} ${tz} ${nx} ${ny} ${nz} ${u.toFixed(6)} ${v.toFixed(6)}`);
         }
       }
     }
