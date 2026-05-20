@@ -573,6 +573,9 @@ def group_meshes(meshes: List[Mesh], proximity: float) -> List[List[Mesh]]:
     uf = UF(n)
     for i in range(n):
         for j in range(i+1, n):
+            # Never mix tiles with different materials — wrong texture for minority tiles
+            if meshes[i].material != meshes[j].material:
+                continue
             if bbox_gap(boxes[i], boxes[j]) <= proximity:
                 uf.union(i, j)
     groups: Dict[int, List[Mesh]] = {}

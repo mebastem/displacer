@@ -1010,11 +1010,24 @@ let _dirty     = true;   // force first frame
 let _lastRender = 0;
 const MAX_IDLE_MS = 2000; // force a render at least every 2 s (keeps Three.js alive)
 
+const BASE_PR   = Math.min(window.devicePixelRatio, 1.5);
+const LOW_PR    = BASE_PR * 0.5;
+let   _moving   = false;
+let   _moveStop = 0;
+
+function setLowRes()  { if (_moving) return; _moving = true;  renderer.setPixelRatio(LOW_PR); }
+function setFullRes() { _moving = false; renderer.setPixelRatio(BASE_PR); markDirty(); }
+
 function markDirty() { _dirty = true; }
+function markMoving() {
+  markDirty();
+  if (!_moving) setLowRes();
+  _moveStop = performance.now() + 200;
+}
 
 // Intercept pointer-lock mouse moves to mark dirty
 document.addEventListener('mousemove', () => {
-  if (document.pointerLockElement === canvas) markDirty();
+  if (document.pointerLockElement === canvas) markMoving();
 });
 
 let _lastT = performance.now();
@@ -1025,8 +1038,11 @@ let _lastT = performance.now();
   _lastT = now;
 
   const anyKey = Object.values(keys).some(Boolean);
-  if (anyKey) markDirty();
+  if (anyKey) markMoving();
   tickFly(dt);
+
+  // Restore full resolution when movement stops
+  if (_moving && now > _moveStop) setFullRes();
 
   if (_dirty || now - _lastRender > MAX_IDLE_MS) {
     renderer.render(scene, camera);
@@ -1093,6 +1109,7 @@ const BLEND_FRAG = `
   uniform float uHasBlend;
   uniform float uFlat;
   uniform vec2  uTexSize;
+  uniform vec2  uTexSize2;
   varying vec3  vWorldPos;
   varying float vAlpha;
   varying vec3  vViewNorm;
@@ -1118,9 +1135,11 @@ const BLEND_FRAG = `
       c1 = uHasTex1 > 0.5 ? triplanar(uTex1, vWorldPos, n, uScale) : vec3(0.55);
       c2 = uHasTex2 > 0.5 ? triplanar(uTex2, vWorldPos, n, uScale) : vec3(0.55);
     } else {
-      vec2 normUv = uTexSize.x > 0.0 ? vUv / uTexSize : vUv * 0.002;
+      // Both textures share the same UV axes in Source — normalize once
+      vec2 baseSize = uTexSize.x > 0.0 ? uTexSize : uTexSize2;
+      vec2 normUv   = baseSize.x > 0.0 ? vUv / baseSize : vUv * 0.002;
       c1 = uHasTex1 > 0.5 ? texture2D(uTex1, normUv).rgb : vec3(0.55);
-      c2 = vec3(0.55);
+      c2 = uHasTex2 > 0.5 ? texture2D(uTex2, normUv).rgb : vec3(0.55);
     }
 
     vec3 color = uHasBlend > 0.5 ? mix(c1, c2, clamp(vAlpha, 0.0, 1.0)) : c1;
@@ -1182,6 +1201,72 @@ function showTileOutline(meshIdx, tile) {
   markDirty();
 }
 
+// ── Cross-group normal smoothing ──────────────────────────────────────────────
+// After each group's normals are computed independently, vertices from different
+// groups that sit at the same world position (within weldDist) get their normals
+// averaged, eliminating hard crease lines at group boundaries.
+function smoothCrossGroupNormals(meshes, weldDist) {
+  if (meshes.length < 2) return;
+
+  // Collect all vertices across all groups
+  const entries = [];
+  meshes.forEach((mesh, mi) => {
+    const pos  = mesh.geometry.attributes.position;
+    const norm = mesh.geometry.attributes.normal;
+    for (let vi = 0; vi < pos.count; vi++) {
+      entries.push({
+        mi, vi,
+        x: pos.getX(vi), y: pos.getY(vi), z: pos.getZ(vi),
+        nx: norm.getX(vi), ny: norm.getY(vi), nz: norm.getZ(vi),
+      });
+    }
+  });
+
+  // Spatial hash — cell size matches weld distance
+  const inv = 1.0 / weldDist;
+  const hash = new Map();
+  entries.forEach((e, idx) => {
+    const key = `${Math.floor(e.x*inv)},${Math.floor(e.y*inv)},${Math.floor(e.z*inv)}`;
+    if (!hash.has(key)) hash.set(key, []);
+    hash.get(key).push(idx);
+  });
+
+  const weld2 = weldDist * weldDist;
+  // mi_vi → [accNx, accNy, accNz, count]
+  const updates = new Map();
+
+  entries.forEach((e, idx) => {
+    const cx = Math.floor(e.x*inv), cy = Math.floor(e.y*inv), cz = Math.floor(e.z*inv);
+    let accX = e.nx, accY = e.ny, accZ = e.nz, cnt = 1;
+
+    for (let dx = -1; dx <= 1; dx++)
+    for (let dy = -1; dy <= 1; dy++)
+    for (let dz = -1; dz <= 1; dz++) {
+      const cell = hash.get(`${cx+dx},${cy+dy},${cz+dz}`);
+      if (!cell) continue;
+      for (const nidx of cell) {
+        const n = entries[nidx];
+        if (n.mi === e.mi) continue; // same group — already smoothed internally
+        const ex = e.x-n.x, ey = e.y-n.y, ez = e.z-n.z;
+        if (ex*ex + ey*ey + ez*ez > weld2) continue;
+        accX += n.nx; accY += n.ny; accZ += n.nz; cnt++;
+      }
+    }
+
+    if (cnt > 1) updates.set(`${e.mi},${e.vi}`, [accX/cnt, accY/cnt, accZ/cnt]);
+  });
+
+  updates.forEach(([nx, ny, nz], key) => {
+    const [mi, vi] = key.split(',').map(Number);
+    const norm = meshes[mi].geometry.attributes.normal;
+    const len = Math.sqrt(nx*nx + ny*ny + nz*nz);
+    if (len > 1e-6) { nx /= len; ny /= len; nz /= len; }
+    norm.setXYZ(vi, nx, ny, nz);
+  });
+
+  meshes.forEach(m => { m.geometry.attributes.normal.needsUpdate = true; });
+}
+
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
   // Clear and dispose old meshes
@@ -1210,12 +1295,10 @@ function buildScene(data) {
     groupMeshes.push(mesh);
     box.expandByObject(mesh);
 
-    const wgeo = new THREE.WireframeGeometry(geo);
-    const wire = new THREE.LineSegments(wgeo, new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: .3 }));
-    wire.visible = false;
-    scene.add(wire);
-    groupWires.push(wire);
+    groupWires.push(null); // created lazily when wireMode is enabled
   });
+
+  smoothCrossGroupNormals(groupMeshes, 2.0);
 
   // Fit camera to scene
   if (!box.isEmpty()) {
@@ -1241,7 +1324,19 @@ function buildScene(data) {
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
 function updateWireframes() {
-  groupWires.forEach(w => { w.visible = wireMode; });
+  groupMeshes.forEach((mesh, i) => {
+    if (wireMode) {
+      if (!groupWires[i]) {
+        const wgeo = new THREE.WireframeGeometry(mesh.geometry);
+        const wire = new THREE.LineSegments(wgeo, new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: .3 }));
+        scene.add(wire);
+        groupWires[i] = wire;
+      }
+      groupWires[i].visible = mesh.visible;
+    } else if (groupWires[i]) {
+      groupWires[i].visible = false;
+    }
+  });
 }
 
 document.getElementById('btn-flat').addEventListener('click', function () {
@@ -1335,7 +1430,7 @@ function applyMatFilter() {
       ? lastData.groups[i].material.replace(/\\/g, '/').split('/').pop().toLowerCase()
       : 'unknown';
     m.visible = all || selectedMats.has(leaf);
-    groupWires[i].visible = m.visible && wireMode;
+    if (groupWires[i]) groupWires[i].visible = m.visible && wireMode;
   });
   document.querySelectorAll('.mat-item').forEach(el => {
     el.classList.toggle('selected', selectedMats.has(el.dataset.leaf));
@@ -1417,8 +1512,8 @@ document.getElementById('tex-input').addEventListener('change', e => {
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
       tex.repeat.set(1 / img.image.width, 1 / img.image.height);
       tex.anisotropy    = renderer.capabilities.getMaxAnisotropy();
-      tex.generateMipmaps = false;
-      tex.minFilter     = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.minFilter     = THREE.LinearMipmapLinearFilter;
       tex.needsUpdate = true;
       loadedTextures[leaf] = tex;
       loadedFiles[leaf]    = file;
@@ -1441,6 +1536,7 @@ function makeBlendMaterial(vmt, grp) {
   const tex2   = loadedTextures[leaf2] || null;
   const hasBlend = !!(tex2 && leaf2);
   const sz1    = loadedSizes[leaf1] || { w: 0, h: 0 };
+  const sz2    = loadedSizes[leaf2] || { w: 0, h: 0 };
   const mat = new THREE.ShaderMaterial({
     vertexShader:   BLEND_VERT,
     fragmentShader: BLEND_FRAG,
@@ -1449,6 +1545,7 @@ function makeBlendMaterial(vmt, grp) {
       uTex2:     { value: tex2 },
       uScale:    { value: sc },
       uTexSize:  { value: new THREE.Vector2(sz1.w, sz1.h) },
+      uTexSize2: { value: new THREE.Vector2(sz2.w, sz2.h) },
       uHasTex1:  { value: tex1 ? 1.0 : 0.0 },
       uHasTex2:  { value: tex2 ? 1.0 : 0.0 },
       uHasBlend: { value: hasBlend ? 1.0 : 0.0 },

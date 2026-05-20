@@ -53,7 +53,7 @@ def process():
         return jsonify({'error': 'No displacement surfaces found in this VMF.'}), 400
 
     no_merge  = request.form.get('no_merge',  'false').lower() == 'true'
-    proximity = float(request.form.get('proximity', 4.0))
+    proximity = float(request.form.get('proximity', 64.0))
     weld      = float(request.form.get('weld', 1.0))
 
     meshes = []
@@ -312,9 +312,11 @@ def bake():
 
 
 if __name__ == '__main__':
-    import webbrowser, threading
-    def _open():
-        import time; time.sleep(0.8)
-        webbrowser.open('http://127.0.0.1:5000')
-    threading.Thread(target=_open, daemon=True).start()
-    app.run(debug=False, port=5000)
+    import webbrowser, threading, os
+    # Only open browser in the main process, not the reloader child
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+        def _open():
+            import time; time.sleep(1.2)
+            webbrowser.open('http://127.0.0.1:5000')
+        threading.Thread(target=_open, daemon=True).start()
+    app.run(debug=True, use_reloader=True, port=5000)
