@@ -20,8 +20,9 @@
   #topbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 0;
+    padding: 0 10px;
+    height: 42px;
     background: #18181f;
     border-bottom: 1px solid #2a2a38;
     flex-shrink: 0;
@@ -30,50 +31,160 @@
   }
   #topbar::-webkit-scrollbar { display: none; }
   #topbar button { flex-shrink: 0; }
-  #topbar h1 { font-size: 16px; font-weight: 600; letter-spacing: 1px; color: #fff; }
-  #topbar .tag { font-size: 11px; color: #666; margin-left: 4px; }
 
+  /* Logo */
+  .tb-logo {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding-right: 14px;
+    flex-shrink: 0;
+  }
+  .tb-logo-text {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+  }
+  .tb-logo-sub {
+    font-size: 9px;
+    color: #3a3a50;
+    letter-spacing: 1px;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+  }
+
+  /* Dividers between groups */
+  .tb-divider {
+    width: 1px;
+    height: 20px;
+    background: #2a2a38;
+    flex-shrink: 0;
+    margin: 0 8px;
+  }
+
+  /* Spacer */
+  .tb-spacer { flex: 1; }
+
+  /* Tool button groups */
+  .tb-group {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+  }
+
+  /* Base tool button */
+  .tb-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 9px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #666;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color .1s, background .1s, border-color .1s;
+    white-space: nowrap;
+  }
+  .tb-btn:hover { background: #1e1e2e; color: #bbb; border-color: #2a2a3a; }
+  .tb-btn:disabled { opacity: .35; cursor: default; }
+  .tb-btn:disabled:hover { background: transparent; color: #666; border-color: transparent; }
+
+  .tb-icon { font-size: 12px; line-height: 1; }
+
+  /* Toggle active states */
+  #toggle-wire.active  { background: #1a1e30; color: #7aadff; border-color: #2a3a6a; }
+  #btn-flat.active     { background: #201e14; color: #e8c84a; border-color: #5a4a18; }
+  #btn-lights.active   { background: #141e16; color: #5eda88; border-color: #1e5a30; }
+  #btn-pick.active     { background: #201814; color: #f09050; border-color: #5a3018; }
+
+  /* Asset buttons — slightly more visible */
+  .tb-asset { color: #555; }
+  .tb-asset:hover { color: #ccc; }
+  .tb-asset.has-tex { color: #7aadff !important; border-color: #2a3a6a !important; background: #1a1e30 !important; }
+
+  /* Export button pair */
+  #btn-export {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 9px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px 0 0 4px;
+    color: #666;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .1s;
+    white-space: nowrap;
+  }
+  #btn-export:hover:not(:disabled) { background: #1e1e2e; color: #bbb; border-color: #2a2a3a; }
+  #btn-export:disabled { opacity: .35; cursor: default; }
+
+  #btn-export-settings {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-left: none;
+    border-radius: 0 4px 4px 0;
+    color: #555;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .1s;
+  }
+  #btn-export-settings:hover:not(:disabled) { background: #1e1e2e; color: #aaa; border-color: #2a2a3a; border-left: none; }
+  #btn-export-settings:disabled { opacity: .35; cursor: default; }
+  #btn-export-settings.open { color: #4a6cf7; background: #1a1e30; border-color: #2a3a6a; border-left: none; }
+
+  /* Bake button */
+  #btn-bake {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 9px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #666;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all .1s;
+    white-space: nowrap;
+  }
+  #btn-bake:hover:not(:disabled) { background: #1e1e2e; color: #bbb; border-color: #2a2a3a; }
+  #btn-bake:disabled { opacity: .35; cursor: default; }
+  #btn-bake.baking { background: #201810; color: #f0a050; border-color: #5a3010; }
+
+  /* Primary Load VMF button */
   #btn-load {
-    margin-left: auto;
-    padding: 7px 18px;
+    height: 30px;
+    padding: 0 16px;
     background: #4a6cf7;
     color: #fff;
     border: none;
-    border-radius: 6px;
-    font-size: 13px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .3px;
     cursor: pointer;
     transition: background .15s;
+    flex-shrink: 0;
+    margin-left: 8px;
   }
   #btn-load:hover { background: #3a5ce0; }
-
-  #btn-export {
-    padding: 7px 18px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px 0 0 6px;
-    border-right: none;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-export:hover:not(:disabled) { background: #25253a; color: #fff; }
-  #btn-export:disabled { opacity: .4; cursor: default; }
-
-  #btn-export-settings {
-    padding: 7px 10px;
-    background: #1e1e2a;
-    color: #666;
-    border: 1px solid #333;
-    border-radius: 0 6px 6px 0;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-    line-height: 1;
-  }
-  #btn-export-settings:hover:not(:disabled) { background: #25253a; color: #aaa; }
-  #btn-export-settings:disabled { opacity: .4; cursor: default; }
-  #btn-export-settings.open { background: #2a2a3a; color: #4a6cf7; border-color: #4a6cf7; }
 
   /* ── Export Settings modal ───────────────────────────────── */
   #export-settings-modal {
@@ -161,93 +272,11 @@
   .esm-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
   .esm-row.disabled { opacity: .35; pointer-events: none; }
 
-  #btn-reset {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-reset:hover { background: #25253a; color: #fff; }
+  #btn-tex.has-tex { border-color: #2a4a6a !important; color: #7aadff !important; background: #1a1e30 !important; }
+  #btn-vmt.has-vmt { border-color: #4a3a1a !important; color: #e8c84a !important; background: #201e14 !important; }
+  .tb-clear { color: #553; }
+  .tb-clear:hover { background: #2a1414 !important; color: #f07070 !important; border-color: #5a2020 !important; }
 
-  #btn-tex {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-tex:hover { background: #25253a; color: #fff; }
-  #btn-tex.has-tex { border-color: #4a7a4a; color: #7adf7a; }
-
-  #btn-vmt {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-vmt:hover { background: #25253a; color: #fff; }
-  #btn-vmt.has-vmt { border-color: #7a6a3a; color: #ffd77a; }
-
-  .tex-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: #4a7a4a;
-    flex-shrink: 0;
-  }
-
-  #toggle-wire {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #toggle-wire:hover { background: #25253a; color: #fff; }
-  #toggle-wire.active { background: #2a3a5a; color: #7aadff; border-color: #4a6cf7; }
-
-  #btn-flat {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-flat:hover { background: #25253a; color: #fff; }
-  #btn-flat.active { background: #2a2a1a; color: #ffe97a; border-color: #c8a030; }
-  #btn-lights { background: #16162a; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
-  #btn-lights:hover { background: #25253a; color: #fff; }
-  #btn-lights.active { background: #1a2a1a; color: #7fffb0; border-color: #30c860; }
-
-  #btn-bake {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-bake:hover:not(:disabled) { background: #25253a; color: #fff; }
-  #btn-bake:disabled { opacity: .4; cursor: default; }
-  #btn-bake.baking { background: #2a1e1e; color: #f7a04a; border-color: #a06030; }
 
   /* ── Import modal ───────────────────────────────────────── */
   #import-modal {
@@ -394,19 +423,6 @@
   #btn-start-bake:hover:not(:disabled) { background: #3a4a7a; }
   #btn-start-bake:disabled { opacity: .4; cursor: default; }
 
-  #btn-pick {
-    padding: 7px 14px;
-    background: #1e1e2a;
-    color: #aaa;
-    border: 1px solid #333;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  #btn-pick:hover:not(:disabled) { background: #25253a; color: #fff; }
-  #btn-pick.active { background: #3a2a1a; color: #ffb347; border-color: #c87020; }
-  #btn-pick:disabled { opacity: .4; cursor: default; }
 
   #pick-info {
     position: absolute;
@@ -642,18 +658,44 @@
 
 <!-- Top bar -->
 <div id="topbar">
-  <h1>DISPLACER <span class="tag">VMF → 3D</span></h1>
-  <button id="toggle-wire">Wireframe</button>
-  <button id="btn-reset">Reset View</button>
-  <button id="btn-flat">Flat Light</button>
-  <button id="btn-lights">Show Lights</button>
-  <button id="btn-vmt">Load VMTs</button>
-  <button id="btn-tex">Load Textures</button>
-  <button id="btn-bake" disabled>Bake &amp; Export</button>
-  <button id="btn-pick" disabled>Tile Picker</button>
-  <div style="position:relative;display:flex">
-    <button id="btn-export" disabled title="Exports baked OBJ (identical to viewer) if textures are loaded, otherwise raw geometry OBJ">Export OBJ</button>
-    <button id="btn-export-settings" disabled title="Export settings">&#9881;</button>
+  <div class="tb-logo">
+    <span class="tb-logo-text">DISPLACER</span>
+    <span class="tb-logo-sub">VMF→3D</span>
+  </div>
+
+  <div class="tb-divider"></div>
+
+  <!-- View controls -->
+  <div class="tb-group">
+    <button id="toggle-wire" class="tb-btn tb-toggle" title="Toggle wireframe">▦ Wire</button>
+    <button id="btn-flat"    class="tb-btn tb-toggle" title="Flat lighting">◐ Flat</button>
+    <button id="btn-lights"  class="tb-btn tb-toggle" title="Show light entities">◉ Lights</button>
+    <button id="btn-reset"   class="tb-btn"           title="Reset camera view">↺ Reset</button>
+  </div>
+
+  <div class="tb-divider"></div>
+
+  <!-- Asset loaders -->
+  <div class="tb-group">
+    <button id="btn-vmt" class="tb-btn tb-asset" title="Load VMT material files">≡ VMTs</button>
+    <button id="btn-tex" class="tb-btn tb-asset" title="Load texture images">▣ Textures</button>
+  </div>
+
+  <button id="btn-clear" class="tb-btn tb-clear" title="Clear scene and load a new VMF" style="display:none">✕ Clear</button>
+
+  <div class="tb-spacer"></div>
+
+  <!-- Export & tools -->
+  <div class="tb-group">
+    <button id="btn-pick"  class="tb-btn tb-toggle" disabled title="Pick a displacement tile">⊕ Picker</button>
+    <button id="btn-bake"  class="tb-btn" disabled title="Bake textures and export for Blender / GoldSrc">⚡ Bake</button>
+  </div>
+
+  <div class="tb-divider"></div>
+
+  <div style="position:relative;display:flex;align-items:center">
+    <button id="btn-export" disabled title="Exports baked OBJ if textures loaded, else raw geometry">↓ Export</button>
+    <button id="btn-export-settings" disabled title="Export settings">⚙</button>
     <div id="export-settings-modal">
       <div class="esm-header">Export Settings <span id="esm-scope-tag">all groups</span></div>
 
@@ -1553,7 +1595,7 @@ document.getElementById('vmt-input').addEventListener('change', e => {
       loaded++;
       if (loaded === files.length) {
         document.getElementById('btn-vmt').classList.add('has-vmt');
-        document.getElementById('btn-vmt').textContent = `VMTs (${Object.keys(vmtByLeaf).length})`;
+        document.getElementById('btn-vmt').textContent = `≡ VMTs (${Object.keys(vmtByLeaf).length})`;
         applyTextures();
       }
     };
@@ -1668,6 +1710,51 @@ function updateStats(data) {
     `Displacements: <span>${data.total_disps}</span><br>` +
     `Groups: <span>${data.groups.length}</span>`;
 }
+
+function clearScene() {
+  // Clear Three.js scene
+  groupMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
+  buildLightHelpers([]);
+  clearTileOutline();
+  groupMeshes = []; groupWires = [];
+
+  // Clear loaded data
+  lastData = null;
+  lastFile = null;
+  Object.keys(loadedTextures).forEach(k => { loadedTextures[k].dispose(); delete loadedTextures[k]; });
+  Object.keys(loadedFiles).forEach(k => delete loadedFiles[k]);
+  Object.keys(loadedSizes).forEach(k => delete loadedSizes[k]);
+  Object.keys(vmtByLeaf).forEach(k => delete vmtByLeaf[k]);
+
+  // Reset UI
+  document.getElementById('drop-zone').classList.remove('hidden');
+  document.getElementById('btn-export').disabled = true;
+  document.getElementById('btn-export-settings').disabled = true;
+  document.getElementById('btn-pick').disabled = true;
+  document.getElementById('btn-bake').disabled = true;
+  document.getElementById('btn-clear').style.display = 'none';
+  document.getElementById('btn-vmt').textContent = '≡ VMTs';
+  document.getElementById('btn-tex').textContent = '▣ Textures';
+  document.getElementById('btn-vmt').classList.remove('has-vmt');
+  document.getElementById('btn-tex').classList.remove('has-tex');
+  document.getElementById('stats').textContent = 'No file loaded';
+  document.getElementById('sidebar-search').style.display = 'none';
+  document.getElementById('group-list').innerHTML = '';
+  document.getElementById('show-all').style.display = 'none';
+
+  // Reset pick/wire mode
+  if (pickMode) {
+    pickMode = false;
+    document.getElementById('btn-pick').classList.remove('active');
+    document.exitPointerLock && document.exitPointerLock();
+  }
+  selectedIdx = -1;
+
+  markDirty();
+}
+
+document.getElementById('btn-clear').addEventListener('click', clearScene);
 
 // ── Export Settings ───────────────────────────────────────────────────────────
 const btnExportSettings = document.getElementById('btn-export-settings');
@@ -2667,6 +2754,7 @@ async function processFile(file) {
     document.getElementById('btn-export-settings').disabled = false;
     document.getElementById('btn-pick').disabled = false;
     document.getElementById('btn-bake').disabled = false;
+    document.getElementById('btn-clear').style.display = '';
     buildScene(data);
     buildGroupList(data);
     updateStats(data);
