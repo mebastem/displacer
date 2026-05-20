@@ -58,11 +58,13 @@ def process():
 
     meshes = []
     side_ids = []  # parallel list: solid_id/side_id for each mesh
+    side_meta = []  # parallel: extra per-tile info (power, etc.)
     warnings = []
     for ds in sides:
         try:
             meshes.append(build_mesh(ds))
             side_ids.append((ds.solid_id, ds.side_id))
+            side_meta.append({'power': ds.dispinfo.power})
         except Exception as e:
             warnings.append({
                 'solid_id': ds.solid_id,
@@ -94,7 +96,8 @@ def process():
 
     out_groups = []
 
-    mesh_to_ids = {id(m): ids for m, ids in zip(meshes, side_ids)}
+    mesh_to_ids  = {id(m): ids  for m, ids  in zip(meshes, side_ids)}
+    mesh_to_meta = {id(m): meta for m, meta in zip(meshes, side_meta)}
 
     if no_merge:
         # Each tile is its own group — no merging, no welding
@@ -107,13 +110,17 @@ def process():
             tile_map = []
             tri_offset = 0
             for m in grp:
-                ids = mesh_to_ids[id(m)]
+                ids  = mesh_to_ids[id(m)]
+                meta = mesh_to_meta[id(m)]
                 tile_map.append({
-                    'solid_id':  ids[0],
-                    'side_id':   ids[1],
-                    'material':  m.material,
-                    'tri_start': tri_offset,
-                    'tri_count': len(m.tris),
+                    'solid_id':   ids[0],
+                    'side_id':    ids[1],
+                    'material':   m.material,
+                    'tri_start':  tri_offset,
+                    'tri_count':  len(m.tris),
+                    'vert_count': len(m.verts),
+                    'power':      meta['power'],
+                    'tex_density': round(m.tex_density, 4),
                 })
                 tri_offset += len(m.tris)
 

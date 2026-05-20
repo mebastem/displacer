@@ -14,10 +14,26 @@ def parse_vmt(text: str) -> Dict[str, str]:
     if m:
         result['__shader__'] = m.group(1).lower()
 
-    # Match: "key" "value"  OR  "key" bare_value
+    # Strip nested blocks (Proxies etc.) so their contents don't clobber top-level params
+    depth = 0
+    flat = []
+    for ch in text:
+        if ch == '{':
+            depth += 1
+            if depth <= 1:
+                flat.append(ch)
+        elif ch == '}':
+            if depth <= 1:
+                flat.append(ch)
+            depth = max(0, depth - 1)
+        elif depth <= 1:
+            flat.append(ch)
+    flat_text = ''.join(flat)
+
+    # Match: "key" "value"  OR  "key" bare_value  (top-level only)
     for m in re.finditer(
         r'"?(\$[^"\s]+)"?\s+(?:"([^"]*)"|([^\s"{}\n]+))',
-        text, re.IGNORECASE
+        flat_text, re.IGNORECASE
     ):
         key = m.group(1).lower()
         val = m.group(2) if m.group(2) is not None else m.group(3)

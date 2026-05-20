@@ -427,19 +427,37 @@
   #pick-info {
     position: absolute;
     top: 12px; left: 12px;
-    background: rgba(10,10,20,.88);
-    border: 1px solid #c87020;
+    background: rgba(8,8,16,.92);
+    border: 1px solid #3a2a14;
     border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 12px;
-    color: #ffb347;
+    padding: 10px 14px;
     pointer-events: none;
     display: none;
-    max-width: 320px;
-    line-height: 1.6;
-    font-family: monospace;
+    width: 230px;
+    backdrop-filter: blur(4px);
   }
   #pick-info.visible { display: block; }
+  .pi-header {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #f09050;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #2a1a08;
+  }
+  .pi-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 2px 0;
+    font-size: 11px;
+  }
+  .pi-key { color: #555; font-family: 'Courier New', monospace; }
+  .pi-val { color: #e0c090; font-family: 'Courier New', monospace; font-weight: 600; }
+  .pi-val.highlight { color: #f09050; }
+
 
   /* ── Main layout ──────────────────────────────────────── */
   #main {
@@ -634,21 +652,26 @@
     letter-spacing: 0.2px;
   }
 
-  #fps {
+  #fps-bar {
     position: absolute;
     top: 10px;
     right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+  }
+  #fps, #mesh-stats {
     font-size: 11px;
     font-family: monospace;
     color: #555;
-    pointer-events: none;
     letter-spacing: 0.5px;
-    transition: color .4s;
     background: rgba(10, 10, 18, 0.55);
     padding: 3px 8px;
     border-radius: 4px;
     border: 1px solid rgba(255,255,255,0.04);
   }
+  #fps { transition: color .4s; }
   #fps.good   { color: #4a9a4a; }
   #fps.medium { color: #c8a030; }
   #fps.bad    { color: #c84040; }
@@ -864,7 +887,10 @@
     </div>
 
     <canvas id="canvas"></canvas>
-    <div id="fps"></div>
+    <div id="fps-bar">
+      <div id="mesh-stats"></div>
+      <div id="fps"></div>
+    </div>
     <div id="pick-info"></div>
     <div id="hud">Click to capture mouse &nbsp;·&nbsp; Esc to release &nbsp;·&nbsp; WASD: fly &nbsp;·&nbsp; E/Q: up/down &nbsp;·&nbsp; Shift: fast &nbsp;·&nbsp; Scroll: speed &nbsp;·&nbsp; F: reset view</div>
   </div>
@@ -1116,9 +1142,16 @@ function parseVmt(text) {
   const result = {};
   const sm = text.match(/"(\w+)"/);
   if (sm) result.__shader__ = sm[1].toLowerCase();
+  // Strip nested blocks (Proxies, etc.) so their keys don't clobber top-level params
+  let depth = 0, flat = '';
+  for (const ch of text) {
+    if      (ch === '{') { depth++; if (depth <= 1) flat += ch; }
+    else if (ch === '}') { if (depth <= 1) flat += ch; depth = Math.max(0, depth - 1); }
+    else if (depth <= 1)  flat += ch;
+  }
   const re = /"?(\$[^"\s]+)"?\s+(?:"([^"]*)"|([^\s"{}\n]+))/gi;
   let m;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(flat)) !== null) {
     result[m[1].toLowerCase()] = m[2] !== undefined ? m[2] : m[3];
   }
   return result;
@@ -1709,6 +1742,13 @@ function updateStats(data) {
     `File: <span>${data.filename}</span><br>` +
     `Displacements: <span>${data.total_disps}</span><br>` +
     `Groups: <span>${data.groups.length}</span>`;
+
+  const totalVerts = data.groups.reduce((s, g) => s + g.verts.length / 3, 0);
+  const totalTris  = data.groups.reduce((s, g) => s + g.indices.length / 3, 0);
+  const fmtNum = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+
+  document.getElementById('mesh-stats').textContent =
+    `${fmtNum(Math.round(totalVerts))}v ${fmtNum(Math.round(totalTris))}t ${data.groups.length}g`;
 }
 
 function clearScene() {
@@ -1739,6 +1779,7 @@ function clearScene() {
   document.getElementById('btn-vmt').classList.remove('has-vmt');
   document.getElementById('btn-tex').classList.remove('has-tex');
   document.getElementById('stats').textContent = 'No file loaded';
+  document.getElementById('mesh-stats').textContent = '';
   document.getElementById('sidebar-search').style.display = 'none';
   document.getElementById('group-list').innerHTML = '';
   document.getElementById('show-all').style.display = 'none';
@@ -2556,7 +2597,7 @@ btnPick.addEventListener('click', () => {
   btnPick.classList.toggle('active', pickMode);
   if (pickMode) {
     pickInfo.classList.add('visible');
-    pickInfo.textContent = 'Click a tile to identify it';
+    pickInfo.innerHTML = '<div class="pi-header">▦ Tile Info</div><div style="font-size:11px;color:#555;padding-top:2px">Click a tile to inspect it</div>';
     document.getElementById('hud').textContent =
       'Tile Picker ON — click any tile to see its solid/side ID · ESC to release mouse · F: reset view';
   } else {
@@ -2591,12 +2632,24 @@ canvas.addEventListener('mousedown', e => {
   const tile     = tileMap.find(t => faceIdx >= t.tri_start && faceIdx < t.tri_start + t.tri_count);
 
   if (tile) {
-    const mat = tile.material ? tile.material.split(/[/\\]/).pop() : '?';
-    pickInfo.textContent = `solid_id: ${tile.solid_id}\nside_id:  ${tile.side_id}\nmaterial: ${mat}`;
-    console.log(`Picked tile — solid_id: ${tile.solid_id}, side_id: ${tile.side_id}, material: ${tile.material}, group: ${grp.name}`);
+    const matFull = tile.material || '?';
+    const matLeaf = matFull.split(/[/\\]/).pop();
+    const gridSize = tile.power ? `${(1 << tile.power) + 1}×${(1 << tile.power) + 1}` : '?';
+    const density  = tile.tex_density ? tile.tex_density.toFixed(3) : '—';
+    pickInfo.innerHTML = `
+      <div class="pi-header">▦ Tile Info</div>
+      <div class="pi-row"><span class="pi-key">solid_id</span><span class="pi-val highlight">${tile.solid_id}</span></div>
+      <div class="pi-row"><span class="pi-key">side_id</span><span class="pi-val highlight">${tile.side_id}</span></div>
+      <div class="pi-row"><span class="pi-key">power</span><span class="pi-val">${tile.power ?? '?'} &nbsp;<small style="color:#444">(${gridSize})</small></span></div>
+      <div class="pi-row"><span class="pi-key">verts</span><span class="pi-val">${tile.vert_count ?? '?'}</span></div>
+      <div class="pi-row"><span class="pi-key">tris</span><span class="pi-val">${tile.tri_count ?? '?'}</span></div>
+      <div class="pi-row"><span class="pi-key">tex_density</span><span class="pi-val">${density}</span></div>
+      <div class="pi-row" style="margin-top:4px;padding-top:4px;border-top:1px solid #1a1a24"><span class="pi-key">material</span></div>
+      <div style="font-size:10px;color:#806040;font-family:'Courier New',monospace;margin-top:2px;word-break:break-all">${matLeaf}</div>`;
+    console.log(`Picked tile — solid_id: ${tile.solid_id}, side_id: ${tile.side_id}, material: ${matFull}, group: ${grp.name}`);
     showTileOutline(meshIdx, tile);
   } else {
-    pickInfo.textContent = `group: ${grp.name}\nfaceIndex: ${faceIdx} (no tile_map)`;
+    pickInfo.innerHTML = `<div class="pi-header">▦ Tile Info</div><div style="font-size:11px;color:#555">group: ${grp.name}<br>faceIndex: ${faceIdx}<br><span style="color:#333">(no tile_map)</span></div>`;
     clearTileOutline();
   }
 }, true);
