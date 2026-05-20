@@ -3205,20 +3205,27 @@ async function _smdExport() {
 
   if (!groups.length) throw new Error('No visible groups to export');
 
-  // SMD static bone header (reused for all files)
-  const SMD_HEADER = `version 1\nnodes\n0 "static_prop" -1\nend\nskeleton\ntime 0\n0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\nend\n`;
-
   const zip = new JSZip();
-  const smdNames = []; // for QC bodygroups
+  const smdNames = [];
 
   // Chunk groups into SMD files
   for (let chunkStart = 0; chunkStart < groups.length; chunkStart += meshPerFile) {
-    const chunk    = groups.slice(chunkStart, chunkStart + meshPerFile);
-    const fileIdx  = Math.floor(chunkStart / meshPerFile);
-    const smdName  = `${baseName}_${String(fileIdx).padStart(3, '0')}`;
+    const chunk   = groups.slice(chunkStart, chunkStart + meshPerFile);
+    const fileIdx = Math.floor(chunkStart / meshPerFile);
+    const smdName = `${baseName}_${String(fileIdx).padStart(3, '0')}`;
     smdNames.push(smdName);
 
-    const lines = [SMD_HEADER, 'triangles'];
+    // Build SMD as a string directly — no trailing \n on header so there's no
+    // blank line before 'triangles' (blank lines can confuse some studiomdl forks)
+    let smd = 'version 1\n';
+    smd += 'nodes\n';
+    smd += '0 "static_prop" -1\n';
+    smd += 'end\n';
+    smd += 'skeleton\n';
+    smd += 'time 0\n';
+    smd += '0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\n';
+    smd += 'end\n';
+    smd += 'triangles\n';
 
     for (const grp of chunk) {
       const ml      = grp.material ? leafNoExt(grp.material) : '__none__';
@@ -3228,39 +3235,34 @@ async function _smdExport() {
       const texName = texFile ? texFile.name.split(/[/\\]/).pop().replace(/\.[^.]+$/, '') + '.bmp' : (ml + '.bmp');
 
       // SMD UVs must be in [0,1) — studiomdl converts to signed short pixel
-      // coords (max ~32767), so UV > 64 overflows for a 512px texture.
-      // Always normalize to texel fraction then wrap via fmod.
-      const sz = loadedSizes[leaf1] || loadedSizes[ml] || null;
+      // coords internally; UV > ~64 overflows for a 512px texture.
+      const sz  = loadedSizes[leaf1] || loadedSizes[ml] || null;
       const uvW = (uvMode === 'normalized' && sz) ? sz.w : 1;
       const uvH = (uvMode === 'normalized' && sz) ? sz.h : 1;
-
       const wrapUV = n => (((n % 1) + 1) % 1);
-      const normU  = raw => wrapUV(raw / uvW);
-      const normV  = raw => wrapUV(raw / uvH);
 
-      const { verts, normals, uvs, indices, alphas } = grp;
+      const { verts, normals, uvs, indices } = grp;
       const idxArr = Array.isArray(indices) ? indices : Array.from(indices);
 
       for (let t = 0; t < idxArr.length; t += 3) {
-        lines.push(texName);
+        smd += texName + '\n';
         for (let k = 0; k < 3; k++) {
           const vi = idxArr[t + k];
-          // Three.js coords (x, y, z) → Source/GoldSrc (x, -z, y)
-          const tx = (verts[vi*3]   * sc).toFixed(6);
+          const tx = (verts[vi*3]    * sc).toFixed(6);
           const ty = (-verts[vi*3+2] * sc).toFixed(6);
-          const tz = (verts[vi*3+1] * sc).toFixed(6);
+          const tz = (verts[vi*3+1]  * sc).toFixed(6);
           const nx = normals[vi*3].toFixed(6);
           const ny = (-normals[vi*3+2]).toFixed(6);
           const nz = normals[vi*3+1].toFixed(6);
-          const u  = normU(uvs[vi*2]   ?? 0);
-          const v  = normV(uvs[vi*2+1] ?? 0);
-          lines.push(`0 ${tx} ${ty} ${tz} ${nx} ${ny} ${nz} ${u.toFixed(6)} ${v.toFixed(6)}`);
+          const u  = wrapUV((uvs[vi*2]   ?? 0) / uvW).toFixed(6);
+          const v  = wrapUV((uvs[vi*2+1] ?? 0) / uvH).toFixed(6);
+          smd += `0 ${tx} ${ty} ${tz} ${nx} ${ny} ${nz} ${u} ${v}\n`;
         }
       }
     }
 
-    lines.push('end\n');
-    zip.file(`${smdName}.smd`, lines.join('\n'));
+    smd += 'end\n';
+    zip.file(`${smdName}.smd`, smd);
 
     // Per-chunk QC if not using one combined QC
     if (!oneQc) {
@@ -3273,7 +3275,7 @@ async function _smdExport() {
 
   // Also export a reference idle SMD (single bone, no geometry — required by studiomdl)
   // Sequence SMDs must NOT have a triangles block — only nodes + skeleton
-  const idleSmd = `version 1\nnodes\n0 "static_prop" -1\nend\nskeleton\ntime 0\n0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\nend\n`;
+  const idleSmd = 'version 1\nnodes\n0 "static_prop" -1\nend\nskeleton\ntime 0\n0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\nend\n';
   zip.file(`${baseName}_idle.smd`, idleSmd);
 
   if (oneQc) {
