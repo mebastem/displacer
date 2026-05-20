@@ -231,6 +231,9 @@
   }
   #btn-flat:hover { background: #25253a; color: #fff; }
   #btn-flat.active { background: #2a2a1a; color: #ffe97a; border-color: #c8a030; }
+  #btn-lights { background: #16162a; color: #aaa; border: 1px solid #333; border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+  #btn-lights:hover { background: #25253a; color: #fff; }
+  #btn-lights.active { background: #1a2a1a; color: #7fffb0; border-color: #30c860; }
 
   #btn-bake {
     padding: 7px 14px;
@@ -643,6 +646,7 @@
   <button id="toggle-wire">Wireframe</button>
   <button id="btn-reset">Reset View</button>
   <button id="btn-flat">Flat Light</button>
+  <button id="btn-lights">Show Lights</button>
   <button id="btn-vmt">Load VMTs</button>
   <button id="btn-tex">Load Textures</button>
   <button id="btn-bake" disabled>Bake &amp; Export</button>
@@ -1319,8 +1323,76 @@ function buildScene(data) {
   updateWireframes();
   showAll();
   applyTextures();
+  buildLightHelpers(data.lights || []);
   markDirty();
 }
+
+// ── Light entity visualization ────────────────────────────────────────────────
+let lightHelpers = [];
+let showLights   = false;
+
+function buildLightHelpers(lights) {
+  lightHelpers.forEach(o => { scene.remove(o); o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); });
+  lightHelpers = [];
+  if (!lights || !lights.length) return;
+
+  lights.forEach(lt => {
+    const [r, g, b] = lt.color;
+    const color = new THREE.Color(r, g, b);
+    // Source → Three.js coord swap: (x, y, z) → (x, z, -y)
+    const [ox, oy, oz] = lt.origin;
+    const pos = new THREE.Vector3(ox, oz, -oy);
+
+    // Glowing sphere
+    const geo  = new THREE.SphereGeometry(12, 8, 8);
+    const mat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.visible = showLights;
+    scene.add(mesh);
+    lightHelpers.push(mesh);
+
+    // Wireframe ring around sphere so it's visible against bright terrain
+    const ringGeo = new THREE.SphereGeometry(13, 8, 8);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.25 });
+    const ring    = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.copy(pos);
+    ring.visible = showLights;
+    scene.add(ring);
+    lightHelpers.push(ring);
+
+    // Direction cone for spot lights and environment lights
+    if (lt.classname === 'light_spot' || lt.classname === 'light_environment') {
+      const pitch = lt.pitch !== undefined ? lt.pitch : lt.angles[0];
+      const yaw   = lt.angles[1];
+      const pitchR = THREE.MathUtils.degToRad(-pitch);
+      const yawR   = THREE.MathUtils.degToRad(yaw);
+      // Direction vector in Source space, then convert
+      const dx = Math.cos(pitchR) * Math.sin(yawR);
+      const dy = Math.cos(pitchR) * Math.cos(yawR);
+      const dz = Math.sin(pitchR);
+      const dir = new THREE.Vector3(dx, dz, -dy).normalize();
+
+      const coneLen  = lt.classname === 'light_environment' ? 300 : 120;
+      const coneGeo  = new THREE.ConeGeometry(coneLen * 0.25, coneLen, 8, 1, true);
+      const coneMat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+      const cone     = new THREE.Mesh(coneGeo, coneMat);
+      // Default cone points up (+Y); rotate to face dir
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      cone.position.copy(pos).addScaledVector(dir, coneLen * 0.5);
+      cone.visible = showLights;
+      scene.add(cone);
+      lightHelpers.push(cone);
+    }
+  });
+}
+
+document.getElementById('btn-lights').addEventListener('click', function () {
+  showLights = !showLights;
+  this.classList.toggle('active', showLights);
+  lightHelpers.forEach(o => { o.visible = showLights; });
+  markDirty();
+});
 
 // ── Wireframe toggle ──────────────────────────────────────────────────────────
 function updateWireframes() {
