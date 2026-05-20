@@ -1,23 +1,14 @@
 # Displacer
 
-Extracts displacement surfaces from Source Engine VMF files, previews them in a 3D web viewer with live texture blending, and bakes them to atlased OBJ/PNG for use in GoldSrc / Blender.
-
-## Tools
-
-| File | What it does |
-|------|-------------|
-| `vmf_disp_to_obj.py` | Core parser — VMF → displacement meshes |
-| `vmt_parser.py` | VMT material file parser (seamless scale, blend detection) |
-| `bake.py` | UV atlas baking — diffuse + normal PNG from uploaded textures |
-| `app.py` | Web viewer + REST API (`/process`, `/bake`) |
+Reads displacement surfaces out of Source Engine VMF files, shows them in a first-person 3D viewer with live texture blending, and bakes them to atlased OBJ/PNG ready for Blender or GoldSrc.
 
 ## Requirements
 
-- Python 3.14+
-- Flask (`pip install flask`)
-- Pillow + numpy — only needed for texture baking (`pip install Pillow numpy`)
+- Python 3.10+
+- Flask — `pip install flask`
+- Pillow + numpy — only needed for baking — `pip install Pillow numpy`
 
-### With [uv](https://docs.astral.sh/uv/) (recommended)
+### With [uv](https://docs.astral.sh/uv/)
 
 ```
 uv sync
@@ -29,80 +20,84 @@ uv sync
 pip install flask Pillow numpy
 ```
 
-## Web Viewer
+## Running the viewer
 
-**With uv:**
 ```
-uv run python app.py
-```
-
-**With Python directly:**
-```
-python app.py
+python app.py          # or: uv run python app.py
 ```
 
-Opens at `http://127.0.0.1:5000` automatically.
+Opens at `http://127.0.0.1:5000`. Drag a `.vmf` onto the page or click **Load VMF**.
 
-### Loading a map
+## Camera
 
-- Drag and drop a `.vmf` file or click **Load VMF**
-- Import Settings let you choose between proximity grouping or per-tile mode
-
-### Sidebar
-
-- Displacement groups are listed **by material** — click a material to isolate its tiles
-- **Shift/Ctrl+click** for multi-material selection
-- **Search box** filters materials by name in real time
-- **Show all** clears the active filter
-
-### Viewport controls
+The viewer is first-person spectator — click the viewport to lock the cursor, then:
 
 | Input | Action |
 |-------|--------|
-| Scroll | Zoom |
-| Left-drag | Orbit |
-| Right-drag | Pan |
-| **F** / Reset View | Snap camera to geometry |
+| W A S D | Move |
+| Mouse | Look |
+| E / Q | Move up / down |
+| Scroll wheel | Adjust move speed |
+| F or Home | Snap to geometry |
+| Esc | Release cursor |
 
-### Toolbar buttons
+## Toolbar
+
+### View
+
+| Button | Key | What it does |
+|--------|-----|-------------|
+| Wire | Z | Overlay triangle grid |
+| Flat | L | Full-brightness lighting (no shading) |
+| Lights | K | Show light entity positions as colored spheres |
+| Props | — | Show prop_static / prop_dynamic origins as pink cubes |
+| Reset | F | Return camera to the saved position |
+
+### Assets
 
 | Button | What it does |
 |--------|-------------|
-| Load VMF | Open a new VMF (also available via drag-and-drop) |
-| Load VMT | Upload `.vmt` material files to enable texture preview |
-| Load Textures | Upload `.bmp`/`.png`/`.jpg` textures to display on the mesh |
-| Wireframe | Overlay the triangle grid |
-| Flat Light | Disable directional lighting so textures read at full brightness |
-| Export OBJ | Download current selection (or all groups) as OBJ files |
-| Bake Textures | Upload VMTs + textures and bake an atlased OBJ/PNG package |
+| VMTs | Upload `.vmt` files to enable texture preview and blending |
+| Textures | Upload `.bmp` / `.png` / `.jpg` textures to display on the mesh |
+| Sky | Upload 6 skybox images — auto-detected from Source suffixes (`_ft`, `_bk`, `_lf`, `_rt`, `_up`, `_dn`) |
 
-### Live texture preview
+### Export
 
-1. Click **Load VMT** and upload the `.vmt` file(s) for your displacement material
-2. Click **Load Textures** and upload the referenced `.bmp`/`.png` textures
-3. The viewer applies a GLSL shader with:
-   - **Triplanar world-space projection** — eliminates stretching on steep faces
-   - **Per-vertex alpha blending** — `WorldVertexTransition` materials blend `$basetexture` → `$basetexture2` using the VMF alpha grid
-   - **Seamless UV** derived from `$seamless_scale`
+| Button | What it does |
+|--------|-------------|
+| Picker | Click a tile in the viewport to inspect its material, power, vert/tri count, and texture density |
+| Bake | Upload VMTs + textures, bake an atlased OBJ/PNG package, download as zip |
+| Export ⚙ | Export OBJ for current selection or all groups; configurable vert limits for GoldSrc |
 
-### Texture baking (`/bake`)
+Press **?** at any time to see the full keyboard shortcut reference.
 
-Click **Bake Textures**, upload VMTs and source textures, choose a resolution, and download `baked.zip` containing per-group:
+## Live texture preview
 
-- `terrain_group_N.obj` — mesh with atlas UVs (Blender Y-up)
-- `terrain_group_N.mtl` — material referencing the baked diffuse
-- `terrain_group_N_diffuse.png` — baked diffuse atlas
-- `terrain_group_N_normal.png` — baked normal map (if bumpmaps were provided)
-- `_bake_report.txt` — lists which VMTs and textures were found/missing
+1. Click **VMTs** and upload the `.vmt` files for your displacement materials
+2. Click **Textures** and upload the `.bmp` / `.png` images they reference
+3. The viewport shader handles:
+   - **WorldVertexTransition** — blends `$basetexture` → `$basetexture2` using the per-vertex alpha grid baked into the VMF
+   - **Seamless UV** — derived from `$seamless_scale` in the VMT
+   - **Non-seamless UV** — normalized to texel space so the texture tiles correctly regardless of face dimensions
 
-## CLI — VMF → OBJ
+## Sidebar
 
-**With uv:**
+Displacement groups are listed by material. Click a material to isolate its tiles; Shift/Ctrl+click to select multiple. The search box filters by name in real time. **Show all** clears the filter.
+
+## Baked export
+
+Click **Bake**, upload VMTs and source textures, pick a resolution. You get a zip with one set per group:
+
 ```
-uv run python vmf_disp_to_obj.py yourmap.vmf
+group_N.obj            mesh with atlas UVs (Blender Y-up)
+group_N.mtl            material pointing at the baked diffuse
+group_N_diffuse.png    baked diffuse atlas
+group_N_normal.png     baked normal map (if bumpmaps were uploaded)
+_bake_report.txt       which VMTs / textures were found or missing
 ```
 
-**With Python directly:**
+## CLI — VMF → OBJ (no server)
+
 ```
 python vmf_disp_to_obj.py yourmap.vmf
 ```
@@ -112,14 +107,23 @@ Options:
 ```
 -o, --output DIR      Output directory (default: ./disp_obj)
 --no-merge            One OBJ per tile instead of grouping by proximity
---proximity FLOAT     Grouping threshold in Source units (default: 4.0)
+--proximity FLOAT     Grouping distance in Source units (default: 4.0)
 --weld FLOAT          Vertex weld tolerance in Source units (default: 1.0)
---stitch FLOAT        Bridge close unmatched boundary edges (default: 128.0, 0 disables)
 -v, --verbose         Print per-tile debug info
 ```
 
-## Blender Import Settings
+## Blender import settings
 
-**File > Import > Wavefront (.obj)**
+**File → Import → Wavefront (.obj)**
 - Forward axis: **-Z**
 - Up axis: **Y**
+
+## File overview
+
+| File | Role |
+|------|------|
+| `app.py` | Flask server — `/process` parses VMF, `/bake` runs the atlas pipeline |
+| `vmf_disp_to_obj.py` | VMF parser and displacement mesh builder |
+| `vmt_parser.py` | VMT parser — extracts shader params, seamless scale, blend detection |
+| `bake.py` | UV atlas baking — triplanar projection → diffuse + normal PNG |
+| `templates/index.html` | Single-page viewer — Three.js, GLSL shaders, all UI |
