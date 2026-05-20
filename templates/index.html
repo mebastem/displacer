@@ -1031,7 +1031,7 @@
           <option value="normalized">Normalized (÷ texture size, requires textures)</option>
         </select>
       </div>
-      <div class="smd-note" id="smd-uv-note">Raw wraps UVs to 0–1 via fmod (no textures needed, tiling scale may differ). Normalized divides by loaded texture dimensions for correct tiling scale.</div>
+      <div class="smd-note" id="smd-uv-note">Both modes wrap UVs to 0–1 (required by studiomdl). Normalized divides by loaded texture size first so tiling scale matches the original map. Raw wraps raw texel coords — tiling scale will differ.</div>
     </div>
 
     <div class="smd-section">
@@ -3227,14 +3227,16 @@ async function _smdExport() {
       const texFile = loadedFiles[leaf1] || loadedFiles[ml] || null;
       const texName = texFile ? texFile.name.split(/[/\\]/).pop().replace(/\.[^.]+$/, '') + '.bmp' : (ml + '.bmp');
 
-      // SMD UVs must be 0-1 normalized. Our raw values are in texel space.
-      // Divide by texture size if known, otherwise wrap with fmod.
+      // SMD UVs must be in [0,1) — studiomdl converts to signed short pixel
+      // coords (max ~32767), so UV > 64 overflows for a 512px texture.
+      // Always normalize to texel fraction then wrap via fmod.
       const sz = loadedSizes[leaf1] || loadedSizes[ml] || null;
-      const uvW = (uvMode === 'normalized' && sz) ? sz.w : 0;
-      const uvH = (uvMode === 'normalized' && sz) ? sz.h : 0;
+      const uvW = (uvMode === 'normalized' && sz) ? sz.w : 1;
+      const uvH = (uvMode === 'normalized' && sz) ? sz.h : 1;
 
-      const normU = raw => uvW > 0 ? raw / uvW : (((raw % 1) + 1) % 1);
-      const normV = raw => uvH > 0 ? 1 - raw / uvH : (1 - (((raw % 1) + 1) % 1));
+      const wrapUV = n => (((n % 1) + 1) % 1);
+      const normU  = raw => wrapUV(raw / uvW);
+      const normV  = raw => wrapUV(raw / uvH);
 
       const { verts, normals, uvs, indices, alphas } = grp;
       const idxArr = Array.isArray(indices) ? indices : Array.from(indices);
