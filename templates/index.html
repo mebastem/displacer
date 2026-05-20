@@ -1043,7 +1043,7 @@
       <div class="smd-row">
         <label><input type="checkbox" id="smd-one-qc" checked> One QC referencing all SMDs as bodygroups</label>
       </div>
-      <div class="smd-note">255 meshes per SMD is the GoldSrc studiomdl limit. With one QC + bodygroups the whole terrain compiles as a single .mdl.</div>
+      <div class="smd-note">255 meshes per SMD is the GoldSrc studiomdl limit. With one QC, all SMDs are compiled as a single .mdl using separate $body declarations.</div>
     </div>
 
     <div class="smd-section">
@@ -3266,7 +3266,8 @@ async function _smdExport() {
   }
 
   // Also export a reference idle SMD (single bone, no geometry — required by studiomdl)
-  const idleSmd = `version 1\nnodes\n0 "static_prop" -1\nend\nskeleton\ntime 0\n0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\nend\ntriangles\nend\n`;
+  // Sequence SMDs must NOT have a triangles block — only nodes + skeleton
+  const idleSmd = `version 1\nnodes\n0 "static_prop" -1\nend\nskeleton\ntime 0\n0 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\nend\n`;
   zip.file(`${baseName}_idle.smd`, idleSmd);
 
   if (oneQc) {
@@ -3309,14 +3310,9 @@ function _buildQc(modelName, smdNames, scale, idleName) {
     ``,
   ];
 
-  if (smdNames.length === 1) {
-    lines.push(`$body "terrain" "${smdNames[0]}"`);
-  } else {
-    lines.push(`$bodygroup "terrain"`);
-    lines.push(`{`);
-    for (const n of smdNames) lines.push(`  studio "${n}"`);
-    lines.push(`}`);
-  }
+  // Each SMD is a separate $body so all chunks are always visible in-game.
+  // ($bodygroup with multiple studio lines means "pick one variant", not "all at once")
+  smdNames.forEach((n, i) => lines.push(`$body "mesh${i}" "${n}"`));
 
   lines.push(``);
   lines.push(`$sequence "idle" "${idleName || smdNames[0]}" fps 1`);
