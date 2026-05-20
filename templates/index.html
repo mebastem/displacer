@@ -275,6 +275,7 @@
 
   #btn-tex.has-tex { border-color: #2a4a6a !important; color: #7aadff !important; background: #1a1e30 !important; }
   #btn-vmt.has-vmt { border-color: #4a3a1a !important; color: #e8c84a !important; background: #201e14 !important; }
+  #btn-sky.has-sky { border-color: #1a3a2a !important; color: #5adba0 !important; background: #141e1a !important; }
   .tb-clear { color: #553; }
   .tb-clear:hover { background: #2a1414 !important; color: #f07070 !important; border-color: #5a2020 !important; }
 
@@ -795,6 +796,7 @@
   <div class="tb-group">
     <button id="btn-vmt" class="tb-btn tb-asset" title="Load VMT material files">≡ VMTs</button>
     <button id="btn-tex" class="tb-btn tb-asset" title="Load texture images">▣ Textures</button>
+    <button id="btn-sky" class="tb-btn tb-asset" title="Load 6 skybox images (ft/bk/lf/rt/up/dn)">⬡ Sky</button>
   </div>
 
   <button id="btn-clear" class="tb-btn tb-clear" title="Clear scene and load a new VMF" style="display:none">✕ Clear</button>
@@ -865,6 +867,7 @@
   <input type="file" id="file-input" accept=".vmf" style="display:none">
   <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
   <input type="file" id="vmt-input" accept=".vmt" multiple style="display:none">
+  <input type="file" id="sky-input" accept=".bmp,.png,.jpg,.jpeg,.tga" multiple style="display:none">
 </div>
 
 <!-- Import modal -->
@@ -1120,8 +1123,12 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement !== canvas) return;
   const sens = 0.002;
-  yaw   -= e.movementX * sens;
-  pitch -= e.movementY * sens;
+  // Clamp raw delta to 100px to absorb the spurious spike browsers fire
+  // on the first event after pointer lock is acquired.
+  const dx = Math.max(-100, Math.min(100, e.movementX));
+  const dy = Math.max(-100, Math.min(100, e.movementY));
+  yaw   -= dx * sens;
+  pitch -= dy * sens;
   pitch  = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
   applyLook();
 });
@@ -1851,6 +1858,79 @@ document.getElementById('tex-input').addEventListener('change', e => {
   e.target.value = '';
 });
 
+// ── Skybox ────────────────────────────────────────────────────────────────────
+// Source face suffix → Three.js CubeTexture slot index [+X,-X,+Y,-Y,+Z,-Z]
+// Source: ft=south(-Y in Three), bk=north(+Y), lf=east(+X), rt=west(-X), up=+Z→+Y three, dn=-Y three
+// Empirically: Three.js CubeTexture [px, nx, py, ny, pz, nz]
+// Source→Three mapping: rt→px(0), lf→nx(1), up→py(2), dn→ny(3), ft→pz(4), bk→nz(5)
+const SKY_SUFFIX_TO_SLOT = { rt:0, lf:1, up:2, dn:3, ft:4, bk:5 };
+let skyTexture = null;
+
+document.getElementById('btn-sky').addEventListener('click', () => {
+  document.getElementById('sky-input').click();
+});
+
+document.getElementById('sky-input').addEventListener('change', e => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  const slots = new Array(6).fill(null);
+  let pending = files.length;
+
+  files.forEach(file => {
+    // Detect face from filename suffix before extension, e.g. "sky_daylight01_ft.bmp"
+    const base = file.name.replace(/\.[^.]+$/, '').toLowerCase();
+    let slot = -1;
+    for (const [suf, idx] of Object.entries(SKY_SUFFIX_TO_SLOT)) {
+      if (base.endsWith(suf)) { slot = idx; break; }
+    }
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if (slot !== -1) slots[slot] = img;
+      pending--;
+      if (pending === 0) applySkybox(slots, files.length);
+    };
+    img.onerror = () => { pending--; if (pending === 0) applySkybox(slots, files.length); };
+    img.src = url;
+  });
+
+  e.target.value = '';
+});
+
+function applySkybox(slots, total) {
+  // Build a CubeTexture from whatever slots were filled
+  const filled = slots.filter(Boolean).length;
+  if (!filled) return;
+
+  // Fill missing slots with a tiny black canvas so Three.js doesn't error
+  const blank = document.createElement('canvas');
+  blank.width = blank.height = 2;
+  const bctx = blank.getContext('2d');
+  bctx.fillStyle = '#000'; bctx.fillRect(0,0,2,2);
+
+  const images = slots.map(img => img || blank);
+
+  if (skyTexture) skyTexture.dispose();
+  skyTexture = new THREE.CubeTexture(images);
+  skyTexture.needsUpdate = true;
+  scene.background = skyTexture;
+
+  const btn = document.getElementById('btn-sky');
+  btn.classList.add('has-sky');
+  btn.textContent = `⬡ Sky (${filled}/6)`;
+  markDirty();
+}
+
+function clearSkybox() {
+  if (skyTexture) { skyTexture.dispose(); skyTexture = null; }
+  scene.background = new THREE.Color(0x1a1a24);
+  const btn = document.getElementById('btn-sky');
+  btn.classList.remove('has-sky');
+  btn.textContent = '⬡ Sky';
+}
+
 function makeBlendMaterial(vmt, grp) {
   const sc     = parseFloat(vmt['$seamless_scale'] || 0) || 0;
   const leaf1  = vmt['$basetexture']  ? leafNoExt(vmt['$basetexture'])  : '';
@@ -1955,6 +2035,7 @@ function clearScene() {
   document.getElementById('btn-tex').textContent = '▣ Textures';
   document.getElementById('btn-vmt').classList.remove('has-vmt');
   document.getElementById('btn-tex').classList.remove('has-tex');
+  clearSkybox();
   document.getElementById('stats').textContent = 'No file loaded';
   document.getElementById('mesh-stats').textContent = '';
   document.getElementById('sidebar-search').style.display = 'none';
