@@ -102,6 +102,7 @@
   #btn-flat.active     { background: #201e14; color: #e8c84a; border-color: #5a4a18; }
   #btn-lights.active   { background: #141e16; color: #5eda88; border-color: #1e5a30; }
   #btn-pick.active     { background: #201814; color: #f09050; border-color: #5a3018; }
+  #btn-props.active    { background: #20141e; color: #f080c0; border-color: #5a1840; }
 
   /* Asset buttons — slightly more visible */
   .tb-asset { color: #555; }
@@ -784,6 +785,7 @@
     <button id="toggle-wire" class="tb-btn tb-toggle" title="Toggle wireframe">▦ Wire</button>
     <button id="btn-flat"    class="tb-btn tb-toggle" title="Flat lighting">◐ Flat</button>
     <button id="btn-lights"  class="tb-btn tb-toggle" title="Show light entities">◉ Lights</button>
+    <button id="btn-props"   class="tb-btn tb-toggle" title="Show prop entities">⬡ Props</button>
     <button id="btn-reset"   class="tb-btn"           title="Reset camera view">↺ Reset</button>
   </div>
 
@@ -1520,6 +1522,7 @@ function buildScene(data) {
   showAll();
   applyTextures();
   buildLightHelpers(data.lights || []);
+  buildPropHelpers(data.props || []);
   markDirty();
 }
 
@@ -1587,6 +1590,44 @@ document.getElementById('btn-lights').addEventListener('click', function () {
   showLights = !showLights;
   this.classList.toggle('active', showLights);
   lightHelpers.forEach(o => { o.visible = showLights; });
+  markDirty();
+});
+
+// ── Prop entity visualization ─────────────────────────────────────────────────
+let propHelpers = [];
+let showProps   = false;
+
+function buildPropHelpers(props) {
+  propHelpers.forEach(o => { scene.remove(o); o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); });
+  propHelpers = [];
+  if (!props || !props.length) return;
+
+  const geo = new THREE.BoxGeometry(16, 16, 16);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf080c0, transparent: true, opacity: 0.8 });
+  const wireMat = new THREE.MeshBasicMaterial({ color: 0xff40a0, wireframe: true, transparent: true, opacity: 0.5 });
+
+  props.forEach(p => {
+    const [ox, oy, oz] = p.origin;
+    const pos = new THREE.Vector3(ox, oz, -oy);
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.visible = showProps;
+    scene.add(mesh);
+    propHelpers.push(mesh);
+
+    const wire = new THREE.Mesh(geo, wireMat);
+    wire.position.copy(pos);
+    wire.visible = showProps;
+    scene.add(wire);
+    propHelpers.push(wire);
+  });
+}
+
+document.getElementById('btn-props').addEventListener('click', function () {
+  showProps = !showProps;
+  this.classList.toggle('active', showProps);
+  propHelpers.forEach(o => { o.visible = showProps; });
   markDirty();
 });
 
@@ -1891,6 +1932,7 @@ function clearScene() {
   groupMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
   groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
   buildLightHelpers([]);
+  buildPropHelpers([]);
   clearTileOutline();
   groupMeshes = []; groupWires = [];
 
