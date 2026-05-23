@@ -11,7 +11,7 @@ import zipfile
 
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from vmf_disp_to_obj import (
-    VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes
+    VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes,
 )
 from vmt_parser import parse_vmt, leaf_no_ext
 

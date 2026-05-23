@@ -1586,8 +1586,8 @@ function smoothCrossGroupNormals(meshes, weldDist) {
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
   // Clear and dispose old meshes
-  groupMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
-  groupWires.forEach(w  => { scene.remove(w); w.geometry.dispose(); w.material.dispose(); });
+  groupMeshes.forEach(m => { if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } });
+  groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
   clearTileOutline();
   groupMeshes = []; groupWires = [];
 
@@ -2116,7 +2116,7 @@ function updateStats(data) {
 
 function clearScene() {
   // Clear Three.js scene
-  groupMeshes.forEach(m => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
+  groupMeshes.forEach(m => { if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } });
   groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
   buildLightHelpers([]);
   buildPropHelpers([]);
@@ -3189,6 +3189,7 @@ document.getElementById('btn-start-smd').addEventListener('click', async () => {
     btn.textContent = 'Export SMD + QC';
   }
 });
+
 
 async function _smdExport() {
   const uvMode      = document.getElementById('smd-uv-mode').value;
