@@ -12,6 +12,7 @@ import zipfile
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from vmf_disp_to_obj import (
     VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes,
+    build_clip_brushes_map,
 )
 from vmt_parser import parse_vmt, leaf_no_ext
 
@@ -316,6 +317,43 @@ def bake():
 
     return Response(generate(), mimetype='text/event-stream',
                     headers={'X-Accel-Buffering': 'no', 'Cache-Control': 'no-cache'})
+
+
+@app.route('/export_clip', methods=['POST'])
+def export_clip():
+    global _last_vmf
+    if not _last_vmf:
+        return jsonify({'error': 'No VMF loaded — open a VMF in the viewer first'}), 400
+
+    depth = float(request.form.get('depth', 64.0))
+    tex   = request.form.get('tex', 'CLIP').strip() or 'CLIP'
+
+    try:
+        blocks = VMFParser(_last_vmf).parse()
+        sides  = extract_disp_sides(blocks)
+    except Exception as e:
+        return jsonify({'error': f'VMF parse error: {e}'}), 400
+
+    if not sides:
+        return jsonify({'error': 'No displacements found in VMF'}), 400
+
+    pairs = []
+    for ds in sides:
+        try:
+            pairs.append((ds, build_mesh(ds)))
+        except Exception:
+            pass
+
+    if not pairs:
+        return jsonify({'error': 'No meshes could be built'}), 400
+
+    map_text = build_clip_brushes_map(pairs, depth=depth, tex=tex)
+
+    fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_clip.map'
+    buf = io.BytesIO(map_text.encode('utf-8'))
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=fname,
+                     mimetype='text/plain')
 
 
 if __name__ == '__main__':

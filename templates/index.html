@@ -845,6 +845,7 @@
     <button id="btn-pick"  class="tb-btn tb-toggle" disabled title="Pick a displacement tile">⊕ Picker</button>
     <button id="btn-bake"  class="tb-btn" disabled title="Bake textures and export for Blender / GoldSrc">⚡ Bake</button>
     <button id="btn-smd"   class="tb-btn" disabled title="Export SMD + QC for GoldSrc studiomdl">▤ SMD</button>
+    <button id="btn-clip"  class="tb-btn" disabled title="Export clip brushes as Valve MAP for GoldSrc collision">⬡ Clip MAP</button>
   </div>
 
   <div class="tb-divider"></div>
@@ -2138,6 +2139,7 @@ function clearScene() {
   document.getElementById('btn-pick').disabled = true;
   document.getElementById('btn-bake').disabled = true;
   document.getElementById('btn-smd').disabled = true;
+  document.getElementById('btn-clip').disabled = true;
   document.getElementById('btn-clear').style.display = 'none';
   document.getElementById('btn-vmt').textContent = '≡ VMTs';
   document.getElementById('btn-tex').textContent = '▣ Textures';
@@ -3191,6 +3193,37 @@ document.getElementById('btn-start-smd').addEventListener('click', async () => {
 });
 
 
+// ── Clip MAP export ───────────────────────────────────────────────────────
+document.getElementById('btn-clip').addEventListener('click', async () => {
+  if (!lastData) return;
+  const btn = document.getElementById('btn-clip');
+  btn.disabled = true;
+  btn.textContent = '⬡ Exporting…';
+  try {
+    const fd = new FormData();
+    fd.append('filename', lastData.filename || 'terrain');
+    fd.append('depth', '64');
+    fd.append('tex', 'CLIP');
+    const res = await fetch('/export_clip', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = (lastData.filename || 'terrain').replace(/\.vmf$/i, '') + '_clip.map';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Clip MAP export failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬡ Clip MAP';
+  }
+});
+
 async function _smdExport() {
   const uvMode      = document.getElementById('smd-uv-mode').value;
   const meshPerFile = parseInt(document.getElementById('smd-meshes-per-file').value) || 255;
@@ -3395,6 +3428,7 @@ async function processFile(file) {
     document.getElementById('btn-pick').disabled = false;
     document.getElementById('btn-bake').disabled = false;
     document.getElementById('btn-smd').disabled = false;
+    document.getElementById('btn-clip').disabled = false;
     document.getElementById('btn-clear').style.display = '';
     buildScene(data);
     buildGroupList(data);

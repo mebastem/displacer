@@ -679,6 +679,100 @@ def merge_meshes(meshes: List[Mesh], weld: float) -> Mesh:
 
 
 # ---------------------------------------------------------------------------
+# Clip brush (GoldSrc MAP) generator
+# ---------------------------------------------------------------------------
+
+def _prism_brush_z(a: Vec3, b: Vec3, c: Vec3, depth: float, tex: str) -> Optional[str]:
+    """
+    5-plane triangular prism of uniform thickness.
+    Bottom = top shifted straight down by depth, so every triangle is exactly
+    `depth` units thick and adjacent prisms share the same vertical side planes.
+    """
+    fn = vcross(vsub(b, a), vsub(c, a))
+    if vlen(fn) < 1e-6:
+        return None
+
+    da: Vec3 = (a[0], a[1], a[2] - depth)
+    db: Vec3 = (b[0], b[1], b[2] - depth)
+    dc: Vec3 = (c[0], c[1], c[2] - depth)
+
+    def fp(v: Vec3) -> str:
+        return f'( {round(v[0])} {round(v[1])} {round(v[2])} )'
+
+    def pl(p0: Vec3, p1: Vec3, p2: Vec3) -> str:
+        return f'{fp(p0)} {fp(p1)} {fp(p2)} {tex} [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1'
+
+    zp_a: Vec3 = (a[0], a[1], a[2] + 1)
+    zp_b: Vec3 = (b[0], b[1], b[2] + 1)
+    zp_c: Vec3 = (c[0], c[1], c[2] + 1)
+
+    if fn[2] >= 0:
+        # Upward-facing: CCW from above
+        # top inward=down, bottom inward=up, sides inward toward centroid
+        return (
+            '{\n'
+            + pl(a,  c,  b)    + '\n'   # top
+            + pl(da, db, dc)   + '\n'   # bottom
+            + pl(b,  a,  zp_b) + '\n'   # side a-b
+            + pl(c,  b,  zp_c) + '\n'   # side b-c
+            + pl(a,  c,  zp_a) + '\n'   # side c-a
+            + '}'
+        )
+    else:
+        # Downward-facing: CW from above — flip top, bottom, and side windings
+        return (
+            '{\n'
+            + pl(a,  b,  c)    + '\n'   # top   (flipped)
+            + pl(da, dc, db)   + '\n'   # bottom (flipped)
+            + pl(a,  b,  zp_a) + '\n'   # side a-b
+            + pl(b,  c,  zp_b) + '\n'   # side b-c
+            + pl(c,  a,  zp_c) + '\n'   # side c-a
+            + '}'
+        )
+
+
+def build_clip_brushes_map(sides_and_meshes: List[Tuple['DispSide', 'Mesh']],
+                           depth: float = 64.0,
+                           tex: str = 'CLIP') -> str:
+    """
+    Generate a Valve-220 .map file with triangular prism clip brushes.
+    One prism per mesh triangle — maximum accuracy, follows every facet
+    of the displaced surface.
+    """
+    valid = [(ds, m) for ds, m in sides_and_meshes if m.verts]
+    if not valid:
+        return ('// Game: Half-Life\n// Format: Valve\n'
+                '// entity 0\n{\n"mapversion" "220"\n"classname" "worldspawn"\n}')
+
+    brush_strs: List[str] = []
+
+    for ds, mesh in valid:
+        for ai, bi, ci in mesh.tris:
+            a = mesh.verts[ai]
+            b = mesh.verts[bi]
+            c = mesh.verts[ci]
+            brush = _prism_brush_z(a, b, c, depth=depth, tex=tex)
+            if brush:
+                brush_strs.append(brush)
+
+    n_disps = len(valid)
+    header = (
+        '// Game: Half-Life\n'
+        '// Format: Valve\n'
+        f'// {len(brush_strs)} clip brushes from {n_disps} displacement(s)\n'
+    )
+    entity = (
+        '// entity 0\n'
+        '{\n'
+        '"mapversion" "220"\n'
+        '"classname" "worldspawn"\n'
+        + '\n'.join(brush_strs)
+        + '\n}'
+    )
+    return header + entity
+
+
+# ---------------------------------------------------------------------------
 # OBJ writer
 # ---------------------------------------------------------------------------
 
