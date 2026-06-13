@@ -102,6 +102,7 @@
   #btn-flat.active     { background: #201e14; color: #e8c84a; border-color: #5a4a18; }
   #btn-lights.active   { background: #141e16; color: #5eda88; border-color: #1e5a30; }
   #btn-pick.active     { background: #201814; color: #f09050; border-color: #5a3018; }
+  #btn-clipsel.active  { background: #201814; color: #f09050; border-color: #5a3018; }
   #btn-props.active    { background: #20141e; color: #f080c0; border-color: #5a1840; }
   #btn-fog.active      { background: #141824; color: #88bbff; border-color: #2a3a6a; }
   #btn-fog.has-fog     { color: #557; }
@@ -879,6 +880,7 @@
     <button id="btn-bake"  class="tb-btn" disabled title="Bake textures and export for Blender / GoldSrc">⚡ Bake</button>
     <button id="btn-smd"   class="tb-btn" disabled title="Export SMD + QC for GoldSrc studiomdl">▤ SMD</button>
     <button id="btn-clip"  class="tb-btn" disabled title="Export clip brushes as Valve MAP for GoldSrc collision (max accuracy, one prism per triangle)">⬡ Clip MAP</button>
+    <button id="btn-clipsel" class="tb-btn tb-toggle" disabled title="Clip-select mode: click displacements in the viewer to mark which ones get clipped (Strip Clip → Selected scope)">◈ Clip Sel</button>
     <button id="btn-clip-opt" class="tb-btn" disabled title="Strip clip: adaptive box brushes that hug the surface within a tolerance — tune brush/clipnode count vs accuracy with a live GoldSrc estimate">⬡ Strip Clip</button>
   </div>
 
@@ -954,7 +956,11 @@
       <div class="esm-label">Scope</div>
       <div class="esm-radio-group">
         <label class="esm-radio"><input type="radio" name="clip-scope" value="all" checked> All displacements</label>
-        <label class="esm-radio"><input type="radio" name="clip-scope" value="visible"> Visible only <small>material filter</small></label>
+        <label class="esm-radio"><input type="radio" name="clip-scope" value="selected"> Selected in viewer <small id="clip-sel-count">(0)</small></label>
+      </div>
+      <div style="font-size:10px;color:#555;margin-top:6px;line-height:1.5">
+        Turn on <b>◈ Clip Sel</b> in the toolbar, then click displacements in the
+        viewer to mark them. <span id="clip-sel-clear" style="color:#7aadff;cursor:pointer">clear selection</span>
       </div>
     </div>
     <div class="esm-section">
@@ -1292,7 +1298,7 @@ function applyLook() {
 applyLook();
 
 // Mouse look — pointer lock so cursor never escapes the window
-canvas.addEventListener('click', () => { if (!pickMode) canvas.requestPointerLock(); });
+canvas.addEventListener('click', () => { if (!pickMode && !clipSelMode) canvas.requestPointerLock(); });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 document.addEventListener('pointerlockchange', () => {
@@ -1679,6 +1685,7 @@ function smoothCrossGroupNormals(meshes, weldDist) {
 // ── Build scene from server response ─────────────────────────────────────────
 function buildScene(data) {
   // Clear and dispose old meshes
+  clearClipSelection();   // drop highlight overlays before disposing their shared geometry
   groupMeshes.forEach(m => { if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } });
   groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
   clearTileOutline();
@@ -2279,6 +2286,7 @@ function updateStats(data) {
 
 function clearScene() {
   // Clear Three.js scene
+  clearClipSelection();   // remove highlight overlays before disposing shared geometry
   groupMeshes.forEach(m => { if (m) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } });
   groupWires.forEach(w  => { if (w) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); } });
   buildLightHelpers([]);
@@ -2302,6 +2310,7 @@ function clearScene() {
   document.getElementById('btn-bake').disabled = true;
   document.getElementById('btn-smd').disabled = true;
   document.getElementById('btn-clip').disabled = true;
+  document.getElementById('btn-clipsel').disabled = true;
   document.getElementById('btn-clip-opt').disabled = true;
   document.getElementById('btn-clear').style.display = 'none';
   document.getElementById('btn-vmt').textContent = '≡ VMTs';
@@ -2320,6 +2329,10 @@ function clearScene() {
     pickMode = false;
     document.getElementById('btn-pick').classList.remove('active');
     document.exitPointerLock && document.exitPointerLock();
+  }
+  if (clipSelMode) {
+    clipSelMode = false;
+    document.getElementById('btn-clipsel').classList.remove('active');
   }
   selectedIdx = -1;
 
@@ -3170,6 +3183,10 @@ btnPick.addEventListener('click', () => {
   pickMode = !pickMode;
   btnPick.classList.toggle('active', pickMode);
   if (pickMode) {
+    if (clipSelMode) {                   // mutually exclusive with clip-select
+      clipSelMode = false;
+      document.getElementById('btn-clipsel').classList.remove('active');
+    }
     pickInfo.classList.add('visible');
     pickInfo.innerHTML = '<div class="pi-header">▦ Tile Info</div><div style="font-size:11px;color:#555;padding-top:2px">Click a tile to inspect it</div>';
     document.getElementById('hud').textContent =
@@ -3432,15 +3449,15 @@ clipTolNum.addEventListener('input', () => syncTol(clipTolNum));
 document.querySelectorAll('input[name="clip-scope"]').forEach(r =>
   r.addEventListener('change', requestClipEstimate));
 
-// Collect (solid_id, side_id) pairs for the chosen scope. Returns null for "all".
+// Collect (solid_id, side_id) pairs for the chosen scope. Returns null for "all",
+// otherwise an array (possibly empty) of the viewer-selected groups' tile ids.
 function clipScopeSides() {
   const scope = document.querySelector('input[name="clip-scope"]:checked')?.value || 'all';
-  if (scope !== 'visible' || !lastData) return null;
+  if (scope !== 'selected' || !lastData) return null;
   const out = [];
-  lastData.groups.forEach((g, i) => {
-    if (groupMeshes[i] && groupMeshes[i].visible !== false) {
-      (g.solid_ids || []).forEach(pair => out.push(pair));
-    }
+  clipSelGroups.forEach(i => {
+    const g = lastData.groups[i];
+    if (g) (g.solid_ids || []).forEach(pair => out.push(pair));
   });
   return out;
 }
@@ -3454,11 +3471,18 @@ function requestClipEstimate() {
   clipEstTimer = setTimeout(doClipEstimate, 250);
 }
 async function doClipEstimate() {
+  const sides = clipScopeSides();
+  if (Array.isArray(sides) && sides.length === 0) {
+    ['clip-est-brushes','clip-est-faces','clip-est-cn','clip-est-headroom']
+      .forEach(id => document.getElementById(id).textContent = '—');
+    const tag = document.getElementById('clip-fit-tag');
+    tag.textContent = 'no displacements selected'; tag.className = '';
+    return;
+  }
   const seq = ++clipEstSeq;
   const fd = new FormData();
   fd.append('tol', clipTolNum.value || '0');
   fd.append('estimate_only', 'true');
-  const sides = clipScopeSides();
   if (sides) fd.append('sides', JSON.stringify(sides));
   try {
     const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
@@ -3483,6 +3507,11 @@ async function doClipEstimate() {
 
 document.getElementById('btn-clip-export').addEventListener('click', async () => {
   if (!lastData) return;
+  const sides = clipScopeSides();
+  if (Array.isArray(sides) && sides.length === 0) {
+    alert('No displacements selected. Turn on ◈ Clip Sel and click displacements in the viewer, or switch scope to "All".');
+    return;
+  }
   const eb  = document.getElementById('btn-clip-export');
   const old = eb.textContent;
   eb.disabled = true; eb.textContent = 'Exporting…';
@@ -3492,7 +3521,6 @@ document.getElementById('btn-clip-export').addEventListener('click', async () =>
     fd.append('depth', '64');
     fd.append('tex', 'CLIP');
     fd.append('tol', clipTolNum.value || '0');
-    const sides = clipScopeSides();
     if (sides) fd.append('sides', JSON.stringify(sides));
     const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
     if (!res.ok) {
@@ -3512,6 +3540,96 @@ document.getElementById('btn-clip-export').addEventListener('click', async () =>
     eb.disabled = false; eb.textContent = old;
   }
 });
+
+// ── Clip-select mode: pick displacements in the viewer for the "Selected" scope ──
+const clipSelGroups  = new Set();    // group indices marked for clipping
+const clipHighlights = new Map();    // groupIdx -> translucent overlay mesh
+let   clipSelMode    = false;
+const CLIP_HL_MAT = new THREE.MeshBasicMaterial({
+  color: 0xff8800, transparent: true, opacity: 0.35,
+  side: THREE.DoubleSide, depthWrite: false,
+});
+const btnClipSel = document.getElementById('btn-clipsel');
+
+function addClipHighlight(i) {
+  if (clipHighlights.has(i)) return;
+  const src = groupMeshes[i];
+  if (!src) return;
+  const m = new THREE.Mesh(src.geometry, CLIP_HL_MAT);   // shares geometry (not disposed here)
+  m.position.copy(src.position);
+  m.quaternion.copy(src.quaternion);
+  m.scale.copy(src.scale);
+  m.renderOrder = 3;
+  scene.add(m);
+  clipHighlights.set(i, m);
+}
+function removeClipHighlight(i) {
+  const m = clipHighlights.get(i);
+  if (m) { scene.remove(m); clipHighlights.delete(i); }
+}
+function clipModalOpen() {
+  const el = document.getElementById('clip-opt-modal');
+  return el && el.style.display === 'block';
+}
+function updateClipSelHud() {
+  const n = clipSelGroups.size;
+  const cnt = document.getElementById('clip-sel-count');
+  if (cnt) cnt.textContent = `(${n})`;
+  if (clipSelMode) {
+    document.getElementById('hud').textContent =
+      `Clip-Select ON — click displacements to toggle (${n} selected) · ESC to release mouse · F: reset view`;
+  }
+}
+function clearClipSelection() {
+  clipSelGroups.clear();
+  clipHighlights.forEach(m => scene.remove(m));
+  clipHighlights.clear();
+  updateClipSelHud();
+  if (clipModalOpen()) requestClipEstimate();
+  markDirty();
+}
+
+btnClipSel.addEventListener('click', () => {
+  clipSelMode = !clipSelMode;
+  btnClipSel.classList.toggle('active', clipSelMode);
+  if (clipSelMode) {
+    if (pickMode) {                      // mutually exclusive with the tile picker
+      pickMode = false;
+      btnPick.classList.remove('active');
+      pickInfo.classList.remove('visible');
+      clearTileOutline();
+    }
+    updateClipSelHud();
+  } else {
+    document.getElementById('hud').textContent =
+      'Click to capture mouse · Esc to release · WASD: fly · E/Q: up/down · Shift: fast · Scroll: speed · F: reset view';
+  }
+});
+
+const _clipSelClear = document.getElementById('clip-sel-clear');
+if (_clipSelClear) _clipSelClear.addEventListener('click', clearClipSelection);
+
+canvas.addEventListener('mousedown', e => {
+  if (!clipSelMode) return;
+  if (document.pointerLockElement === canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const ndc  = new THREE.Vector2(
+    ((e.clientX - rect.left) / rect.width)  *  2 - 1,
+    ((e.clientY - rect.top)  / rect.height) * -2 + 1
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(groupMeshes, false);
+  if (!hits.length) return;
+  const i = groupMeshes.indexOf(hits[0].object);
+  if (i < 0) return;
+  if (clipSelGroups.has(i)) { clipSelGroups.delete(i); removeClipHighlight(i); }
+  else                      { clipSelGroups.add(i);    addClipHighlight(i); }
+  const selRadio = document.querySelector('input[name="clip-scope"][value="selected"]');
+  if (selRadio) selRadio.checked = true;   // selecting implies the "Selected" scope
+  updateClipSelHud();
+  if (clipModalOpen()) requestClipEstimate();
+  markDirty();
+}, true);
 
 async function _smdExport() {
   const uvMode      = document.getElementById('smd-uv-mode').value;
@@ -3718,6 +3836,7 @@ async function processFile(file) {
     document.getElementById('btn-bake').disabled = false;
     document.getElementById('btn-smd').disabled = false;
     document.getElementById('btn-clip').disabled = false;
+    document.getElementById('btn-clipsel').disabled = false;
     document.getElementById('btn-clip-opt').disabled = false;
     document.getElementById('btn-clear').style.display = '';
     buildScene(data);
