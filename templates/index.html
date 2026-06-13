@@ -270,6 +270,35 @@
   .esm-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
   .esm-row.disabled { opacity: .35; pointer-events: none; }
 
+  /* Strip clip popover */
+  #clip-opt-modal {
+    background: #18181f;
+    border: 1px solid #2a2a38;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    overflow: hidden;
+  }
+  #clip-fit-tag.fits { color: #5eda88 !important; }
+  #clip-fit-tag.over  { color: #f07070 !important; }
+  #btn-clip-opt.open { background: #1a1e30; color: #7aadff; border-color: #2a3a6a; }
+  #btn-clip-export {
+    width: 100%;
+    height: 32px;
+    background: #4a6cf7;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  #btn-clip-export:hover:not(:disabled) { background: #3a5ce0; }
+  #btn-clip-export:disabled { opacity: .5; cursor: default; }
+  #clip-est-cn.over { color: #f07070; }
+  #clip-est-headroom.over { color: #f07070; }
+
   #btn-tex.has-tex { border-color: #2a4a6a !important; color: #7aadff !important; background: #1a1e30 !important; }
   #btn-vmt.has-vmt { border-color: #4a3a1a !important; color: #e8c84a !important; background: #201e14 !important; }
   #btn-sky.has-sky { border-color: #1a3a2a !important; color: #5adba0 !important; background: #141e1a !important; }
@@ -850,7 +879,7 @@
     <button id="btn-bake"  class="tb-btn" disabled title="Bake textures and export for Blender / GoldSrc">⚡ Bake</button>
     <button id="btn-smd"   class="tb-btn" disabled title="Export SMD + QC for GoldSrc studiomdl">▤ SMD</button>
     <button id="btn-clip"  class="tb-btn" disabled title="Export clip brushes as Valve MAP for GoldSrc collision (max accuracy, one prism per triangle)">⬡ Clip MAP</button>
-    <button id="btn-clip-opt" class="tb-btn" disabled title="Export optimised clip brushes — one convex-hull brush per displacement tile, ~90% fewer clipnodes">⬡ Opt Clip</button>
+    <button id="btn-clip-opt" class="tb-btn" disabled title="Strip clip: adaptive box brushes that hug the surface within a tolerance — tune brush/clipnode count vs accuracy with a live GoldSrc estimate">⬡ Strip Clip</button>
   </div>
 
   <div class="tb-divider"></div>
@@ -917,6 +946,34 @@
         </div>
       </div>
     </div>
+
+  <!-- Strip clip popover (anchored to #btn-clip-opt) -->
+  <div id="clip-opt-modal" style="display:none;position:fixed;z-index:1000;width:300px">
+    <div class="esm-header">Strip Clip <span id="clip-fit-tag">—</span></div>
+    <div class="esm-section">
+      <div class="esm-label">Surface tolerance</div>
+      <div class="esm-row">
+        <input type="range" id="clip-tol" min="0" max="512" step="2" value="64" style="flex:1;accent-color:#4a6cf7">
+        <input type="number" id="clip-tol-num" value="64" min="0" max="4096" step="2">
+      </div>
+      <div style="font-size:10px;color:#555;margin-top:6px;line-height:1.5">
+        Clip sits 0–tol units above the surface. 0 hugs every facet (most brushes);
+        higher merges flat areas (fewer clipnodes).
+      </div>
+    </div>
+    <div class="esm-section">
+      <div class="esm-label">Estimated GoldSrc cost</div>
+      <div style="font-size:12px;color:#aaa;line-height:1.8">
+        <div><b id="clip-est-brushes">—</b> brushes · <b id="clip-est-faces">—</b> faces</div>
+        <div><b id="clip-est-cn">—</b> / 32767 clipnodes</div>
+        <div>headroom <b id="clip-est-headroom">—</b></div>
+      </div>
+    </div>
+    <div class="esm-section">
+      <button id="btn-clip-export">↓ Export Strip Clip MAP</button>
+    </div>
+  </div>
+
   <button id="btn-load">Load VMF</button>
   <input type="file" id="file-input" accept=".vmf" style="display:none">
   <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
@@ -3324,16 +3381,93 @@ document.getElementById('btn-clip').addEventListener('click', async () => {
 });
 
 // ── Optimised Clip MAP export ─────────────────────────────────────────────
-document.getElementById('btn-clip-opt').addEventListener('click', async () => {
+// ── Strip clip popover (tolerance slider + live GoldSrc estimate) ──────────
+const clipModal  = document.getElementById('clip-opt-modal');
+const clipTol    = document.getElementById('clip-tol');
+const clipTolNum = document.getElementById('clip-tol-num');
+const btnClipOpt = document.getElementById('btn-clip-opt');
+
+function openClipModal() {
+  const rect = btnClipOpt.getBoundingClientRect();
+  clipModal.style.display = 'block';
+  clipModal.style.top  = (rect.bottom + 6) + 'px';
+  let left = Math.min(rect.left, window.innerWidth - 312);
+  clipModal.style.left = Math.max(8, left) + 'px';
+  btnClipOpt.classList.add('open');
+  requestClipEstimate();
+}
+function closeClipModal() {
+  clipModal.style.display = 'none';
+  btnClipOpt.classList.remove('open');
+}
+
+btnClipOpt.addEventListener('click', e => {
   if (!lastData) return;
-  const btn = document.getElementById('btn-clip-opt');
-  btn.disabled = true;
-  btn.textContent = '⬡ Exporting…';
+  e.stopPropagation();
+  (clipModal.style.display === 'none' || clipModal.style.display === '')
+    ? openClipModal() : closeClipModal();
+});
+document.addEventListener('click', e => {
+  if (clipModal.style.display === 'block' &&
+      !clipModal.contains(e.target) && e.target !== btnClipOpt) {
+    closeClipModal();
+  }
+});
+
+function syncTol(src) {
+  let v = Math.max(0, parseInt(src.value) || 0);
+  clipTol.value    = Math.min(v, parseInt(clipTol.max));
+  clipTolNum.value = v;
+  requestClipEstimate();
+}
+clipTol.addEventListener('input',    () => syncTol(clipTol));
+clipTolNum.addEventListener('input', () => syncTol(clipTolNum));
+
+let clipEstTimer = null, clipEstSeq = 0;
+function requestClipEstimate() {
+  if (!lastData) return;
+  clearTimeout(clipEstTimer);
+  const tag = document.getElementById('clip-fit-tag');
+  tag.textContent = '…'; tag.className = '';
+  clipEstTimer = setTimeout(doClipEstimate, 250);
+}
+async function doClipEstimate() {
+  const seq = ++clipEstSeq;
+  const fd = new FormData();
+  fd.append('tol', clipTolNum.value || '0');
+  fd.append('estimate_only', 'true');
+  try {
+    const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
+    const j = await res.json();
+    if (seq !== clipEstSeq) return;             // a newer request superseded this
+    if (j.error) throw new Error(j.error);
+    const fmt = n => Number(n).toLocaleString();
+    document.getElementById('clip-est-brushes').textContent  = fmt(j.brushes);
+    document.getElementById('clip-est-faces').textContent    = fmt(j.faces);
+    document.getElementById('clip-est-cn').textContent       = fmt(j.clipnodes);
+    document.getElementById('clip-est-headroom').textContent = fmt(j.headroom);
+    document.getElementById('clip-est-cn').classList.toggle('over', !j.fits);
+    document.getElementById('clip-est-headroom').classList.toggle('over', !j.fits);
+    const tag = document.getElementById('clip-fit-tag');
+    tag.textContent = j.fits ? 'fits ✓' : 'over limit ✗';
+    tag.className   = j.fits ? 'fits' : 'over';
+  } catch (e) {
+    if (seq !== clipEstSeq) return;
+    document.getElementById('clip-fit-tag').textContent = 'estimate failed';
+  }
+}
+
+document.getElementById('btn-clip-export').addEventListener('click', async () => {
+  if (!lastData) return;
+  const eb  = document.getElementById('btn-clip-export');
+  const old = eb.textContent;
+  eb.disabled = true; eb.textContent = 'Exporting…';
   try {
     const fd = new FormData();
     fd.append('filename', lastData.filename || 'terrain');
     fd.append('depth', '64');
     fd.append('tex', 'CLIP');
+    fd.append('tol', clipTolNum.value || '0');
     const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -3343,14 +3477,13 @@ document.getElementById('btn-clip-opt').addEventListener('click', async () => {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = (lastData.filename || 'terrain').replace(/\.vmf$/i, '') + '_clip_opt.map';
+    a.download = (lastData.filename || 'terrain').replace(/\.vmf$/i, '') + '_clip_strip.map';
     a.click();
     URL.revokeObjectURL(url);
   } catch (e) {
-    alert('Opt Clip export failed: ' + e.message);
+    alert('Strip clip export failed: ' + e.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = '⬡ Opt Clip';
+    eb.disabled = false; eb.textContent = old;
   }
 });
 

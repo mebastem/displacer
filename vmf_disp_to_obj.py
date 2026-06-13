@@ -772,80 +772,287 @@ def build_clip_brushes_map(sides_and_meshes: List[Tuple['DispSide', 'Mesh']],
     return header + entity
 
 
-def build_clip_brushes_map_opt(
-        sides_and_meshes: List[Tuple['DispSide', 'Mesh']],
-        depth: float = 64.0,
-        tex: str = 'CLIP') -> str:
-    """
-    Optimised clip MAP: one convex-hull brush per displacement tile instead of
-    one triangular prism per triangle.  Typically reduces GoldSrc clipnodes by
-    ~90%.  Falls back to the per-triangle approach when scipy is unavailable.
-    """
-    try:
-        from scipy.spatial import ConvexHull
-        import numpy as np
-    except ImportError:
-        return build_clip_brushes_map(sides_and_meshes, depth=depth, tex=tex)
+def _centroid(pts: List[Vec3]) -> Vec3:
+    k = 1.0 / len(pts)
+    return (sum(p[0] for p in pts) * k,
+            sum(p[1] for p in pts) * k,
+            sum(p[2] for p in pts) * k)
 
+
+def _emit_brush(face_tris, cen: Vec3, tex: str) -> Optional[str]:
+    """
+    Emit a Valve-220 brush from a list of (p0,p1,p2) face-defining triangles.
+    Per-face winding is fixed so (p1-p0)x(p2-p0) points inward (toward cen).
+    Returns None if any face is degenerate.
+    """
+    def fp(v: Vec3) -> str:
+        return f'( {round(v[0])} {round(v[1])} {round(v[2])} )'
+
+    lines = ['{']
+    for p0, p1, p2 in face_tris:
+        n = vcross(vsub(p1, p0), vsub(p2, p0))
+        if vlen(n) < 1e-6:
+            return None
+        if vdot(n, vsub(cen, p0)) < 0:      # make inward normal face the centroid
+            p1, p2 = p2, p1
+        lines.append(f'{fp(p0)} {fp(p1)} {fp(p2)} {tex} [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1')
+    lines.append('}')
+    return '\n'.join(lines)
+
+
+def _box_brush(top: List[Vec3], bot: List[Vec3], cen: Vec3, tex: str) -> Optional[str]:
+    """6-face convex box brush from a top quad and bottom quad (same lateral
+    footprint, offset along the slab axis); `top`/`bot` are 4 verts in ring order."""
+    t0, t1, t2, t3 = top
+    b0, b1, b2, b3 = bot
+    return _emit_brush([
+        (t0, t1, t2),   # top cap
+        (b0, b1, b2),   # bottom cap
+        (t0, t1, b1),   # side 0-1
+        (t1, t2, b2),   # side 1-2
+        (t2, t3, b3),   # side 2-3
+        (t3, t0, b0),   # side 3-0
+    ], cen, tex)
+
+
+def _prism_brush(top: List[Vec3], bot: List[Vec3], cen: Vec3, tex: str) -> Optional[str]:
+    """5-face convex triangular prism from a top triangle and bottom triangle
+    (always valid — used for leaf quads whose footprint is non-convex)."""
+    t0, t1, t2 = top
+    b0, b1, b2 = bot
+    return _emit_brush([
+        (t0, t1, t2),   # top cap
+        (b0, b1, b2),   # bottom cap
+        (t0, t1, b1),   # side 0-1
+        (t1, t2, b2),   # side 1-2
+        (t2, t0, b0),   # side 2-0
+    ], cen, tex)
+
+
+def _foot_2d(corners: List[Vec3], n: Vec3):
+    """Project corners onto the plane perpendicular to n, return 2D coords."""
+    a = (1.0, 0.0, 0.0) if abs(n[0]) < 0.9 else (0.0, 1.0, 0.0)
+    u = vsub(a, vscale(n, vdot(a, n)))
+    ul = vlen(u)
+    u = vscale(u, 1.0 / ul) if ul > 1e-9 else (1.0, 0.0, 0.0)
+    v = vcross(n, u)
+    return [(vdot(c, u), vdot(c, v)) for c in corners]
+
+
+def _quad_convex(p2d) -> bool:
+    """Is the 4-point ring p2d a convex quad?"""
+    sign = 0
+    for i in range(4):
+        x0, y0 = p2d[i]; x1, y1 = p2d[(i+1) % 4]; x2, y2 = p2d[(i+2) % 4]
+        cr = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1)
+        if abs(cr) < 1e-6:
+            continue
+        s = 1 if cr > 0 else -1
+        if sign == 0:
+            sign = s
+        elif s != sign:
+            return False
+    return True
+
+
+def _diag_side(a, b, p) -> float:
+    """Signed side of point p relative to directed line a->b (2D)."""
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+
+
+def _tile_leaves(V, N, size: int, tol: float):
+    """
+    Adaptive kd-decomposition of one displacement tile (numpy-accelerated).
+    Recursively split the grid (sharing the cut row/col so neighbours abut) until
+    each block's vertices fit within a `tol`-thick slab measured along the block's
+    average surface normal.  Returns a list of leaf tuples
+    (r0, r1, c0, c1, n_tuple, lo, hi).  Flat regions collapse to one leaf; only
+    genuinely curved regions (surf valleys) subdivide, so the clip hugs the
+    surface without bridging and without a per-quad brush explosion.
+    """
+    import numpy as np
+
+    def slab(r0, r1, c0, c1):
+        nb = N[r0:r1+1, c0:c1+1].reshape(-1, 3).sum(0)
+        ln = float((nb[0]**2 + nb[1]**2 + nb[2]**2) ** 0.5)
+        n = nb / ln if ln > 1e-9 else np.array([0.0, 0.0, 1.0])
+        H = V[r0:r1+1, c0:c1+1].reshape(-1, 3) @ n
+        return n, float(H.min()), float(H.max())
+
+    def convex_foot(r0, r1, c0, c1, n):
+        """Are the 4 block corners a convex quad when viewed along n?  A block can
+        be flat (thin slab) yet fold in plan view (lateral S-curve) — that makes a
+        non-convex, invalid brush, so such blocks must keep subdividing."""
+        cs = [V[r0, c0], V[r0, c1], V[r1, c1], V[r1, c0]]
+        a = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        u = a - n * float(a @ n)
+        un = float((u @ u) ** 0.5)
+        if un < 1e-9:
+            return True
+        u = u / un
+        v = np.cross(n, u)
+        p = [(float(c @ u), float(c @ v)) for c in cs]
+        sign = 0
+        for i in range(4):
+            x0, y0 = p[i]; x1, y1 = p[(i+1) % 4]; x2, y2 = p[(i+2) % 4]
+            cr = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1)
+            if abs(cr) < 1e-6:
+                continue
+            s = 1 if cr > 0 else -1
+            if sign == 0:
+                sign = s
+            elif s != sign:
+                return False
+        return True
+
+    leaves = []
+    stack = [(0, size - 1, 0, size - 1)]
+    while stack:
+        r0, r1, c0, c1 = stack.pop()
+        n, lo, hi = slab(r0, r1, c0, c1)
+        atomic = (r1 - r0 <= 1 and c1 - c0 <= 1)
+
+        if atomic or ((hi - lo) <= tol and convex_foot(r0, r1, c0, c1, n)):
+            leaves.append((r0, r1, c0, c1, (float(n[0]), float(n[1]), float(n[2])), lo, hi))
+            continue
+
+        # Split along whichever axis yields the flatter pair of children.
+        # Require span >= 2 so the cut strictly divides the block — a span-1 split
+        # has cmid == c0, making one child equal the parent (infinite recursion).
+        best = None  # (axis, mid, score)
+        if r1 - r0 >= 2:
+            rmid = (r0 + r1) // 2
+            _, l1, h1 = slab(r0, rmid, c0, c1)
+            _, l2, h2 = slab(rmid, r1, c0, c1)
+            best = ('r', rmid, max(h1 - l1, h2 - l2))
+        if c1 - c0 >= 2:
+            cmid = (c0 + c1) // 2
+            _, l1, h1 = slab(r0, r1, c0, cmid)
+            _, l2, h2 = slab(r0, r1, cmid, c1)
+            score = max(h1 - l1, h2 - l2)
+            if best is None or score < best[2]:
+                best = ('c', cmid, score)
+
+        if best[0] == 'r':
+            stack.append((r0, best[1], c0, c1))
+            stack.append((best[1], r1, c0, c1))
+        else:
+            stack.append((r0, r1, c0, best[1]))
+            stack.append((r0, r1, best[1], c1))
+
+    return leaves
+
+
+def _tile_boxes(verts: List[Vec3], normals: List[Vec3], size: int,
+                tol: float, depth: float, tex: str) -> List[str]:
+    """
+    Build clip brush strings for one tile's kd-decomposition leaves.  A leaf with
+    a convex footprint becomes one 6-face box; a leaf that folds in plan view
+    (e.g. a sharply warped surf-transition quad that can't subdivide further) is
+    split on its internal diagonal into two always-valid triangular prisms.
+    """
+    import numpy as np
+    V = np.asarray(verts,   dtype=np.float64).reshape(size, size, 3)
+    N = np.asarray(normals, dtype=np.float64).reshape(size, size, 3)
+
+    out: List[str] = []
+    for r0, r1, c0, c1, n, lo, hi in _tile_leaves(V, N, size, tol):
+        top_h, bot_h = hi, lo - depth
+        corners = [verts[r0*size + c0], verts[r0*size + c1],
+                   verts[r1*size + c1], verts[r1*size + c0]]
+        top = [vadd(p, vscale(n, top_h - vdot(n, p))) for p in corners]
+        bot = [vadd(p, vscale(n, bot_h - vdot(n, p))) for p in corners]
+        p2d = _foot_2d(corners, n)
+
+        if _quad_convex(p2d):
+            b = _box_brush(top, bot, _centroid(top + bot), tex)
+            if b:
+                out.append(b)
+        else:
+            # Pick the diagonal that lies inside the (simple) non-convex quad:
+            # 0-2 is internal when corners 1 and 3 sit on opposite sides of it.
+            s1 = _diag_side(p2d[0], p2d[2], p2d[1])
+            s3 = _diag_side(p2d[0], p2d[2], p2d[3])
+            tri_idx = [(0, 1, 2), (0, 2, 3)] if s1 * s3 < 0 else [(1, 2, 3), (1, 3, 0)]
+            for i, j, k in tri_idx:
+                tt = [top[i], top[j], top[k]]
+                bb = [bot[i], bot[j], bot[k]]
+                pr = _prism_brush(tt, bb, _centroid(tt + bb), tex)
+                if pr:
+                    out.append(pr)
+    return out
+
+
+def build_clip_brushes_map_strip(
+        sides_and_meshes: List[Tuple['DispSide', 'Mesh']],
+        tol: float = 4.0,
+        depth: float = 64.0,
+        tex: str = 'CLIP') -> Tuple[str, dict]:
+    """
+    Adaptive-decomposition clip MAP.  Each displacement is kd-split into blocks
+    that stay flat within `tol` units (measured along the local surface normal);
+    each block becomes one convex box brush whose top sits 0..tol above the real
+    surface.  Flat ground collapses to a single brush, while creases/valleys
+    subdivide so the clip hugs concave surf terrain instead of bridging across it.
+    Far fewer brushes/clipnodes than the per-triangle export.
+
+    Returns (map_text, {'brushes': int, 'faces': int}).
+    """
     _EMPTY = ('// Game: Half-Life\n// Format: Valve\n'
               '// entity 0\n{\n"mapversion" "220"\n"classname" "worldspawn"\n}')
 
     valid = [(ds, m) for ds, m in sides_and_meshes if m.verts]
     if not valid:
-        return _EMPTY
+        return _EMPTY, {'brushes': 0, 'faces': 0}
 
-    def fp(v) -> str:
-        return f'( {round(float(v[0]))} {round(float(v[1]))} {round(float(v[2]))} )'
-
+    tol = max(0.0, float(tol))
     brush_strs: List[str] = []
-
-    for _ds, mesh in valid:
-        # Point cloud: terrain surface + depth-shifted underside
-        pts = []
-        for vx, vy, vz in mesh.verts:
-            pts.append([vx, vy, vz])
-            pts.append([vx, vy, vz - depth])
-
-        arr = np.array(pts, dtype=np.float64)
-        if arr.shape[0] < 4:
+    for ds, mesh in valid:
+        power = ds.dispinfo.power
+        size  = (1 << power) + 1
+        if len(mesh.verts) < size * size or len(mesh.normals) < size * size:
             continue
-
-        try:
-            hull = ConvexHull(arr, qhull_options='QJ')
-        except Exception:
-            continue
-
-        lines = ['{']
-        for i, simplex in enumerate(hull.simplices):
-            p0 = arr[simplex[0]]
-            p1 = arr[simplex[1]]
-            p2 = arr[simplex[2]]
-            outward = hull.equations[i, :3]
-            # Valve-220: (p1-p0)×(p2-p0) = INWARD normal = opposite of outward
-            if np.dot(np.cross(p1 - p0, p2 - p0), outward) > 0:
-                p1, p2 = p2, p1
-            lines.append(
-                f'{fp(p0)} {fp(p1)} {fp(p2)} '
-                f'{tex} [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1'
-            )
-        lines.append('}')
-        brush_strs.append('\n'.join(lines))
+        brush_strs.extend(_tile_boxes(mesh.verts, mesh.normals, size, tol, depth, tex))
 
     if not brush_strs:
-        return _EMPTY
+        return _EMPTY, {'brushes': 0, 'faces': 0}
+
+    faces = sum(b.count('\n') - 1 for b in brush_strs)   # lines between { and }
 
     n_disps = len(valid)
     header = (
         '// Game: Half-Life\n'
         '// Format: Valve\n'
-        f'// {len(brush_strs)} optimised clip brushes from {n_disps} displacement(s)\n'
+        f'// {len(brush_strs)} strip clip brushes ({faces} faces) '
+        f'from {n_disps} displacement(s)\n'
     )
     entity = (
         '// entity 0\n{\n"mapversion" "220"\n"classname" "worldspawn"\n'
         + '\n'.join(brush_strs)
         + '\n}'
     )
-    return header + entity
+    return header + entity, {'brushes': len(brush_strs), 'faces': faces}
+
+
+def estimate_clip_strip(sides_and_meshes: List[Tuple['DispSide', 'Mesh']],
+                        tol: float = 4.0) -> dict:
+    """
+    Fast clipnode estimate for the strip exporter — counts kd leaves (6 faces
+    each) without building any brush strings, so it is cheap enough to drive a
+    live slider readout.  Returns {'brushes', 'faces'}.
+    """
+    import numpy as np
+    valid = [(ds, m) for ds, m in sides_and_meshes if m.verts]
+    tol = max(0.0, float(tol))
+    leaves = 0
+    for ds, mesh in valid:
+        size = (1 << ds.dispinfo.power) + 1
+        if len(mesh.verts) < size * size or len(mesh.normals) < size * size:
+            continue
+        V = np.asarray(mesh.verts,   dtype=np.float64).reshape(size, size, 3)
+        N = np.asarray(mesh.normals, dtype=np.float64).reshape(size, size, 3)
+        leaves += len(_tile_leaves(V, N, size, tol))
+    return {'brushes': leaves, 'faces': leaves * 6}
 
 
 # ---------------------------------------------------------------------------

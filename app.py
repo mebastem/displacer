@@ -12,7 +12,7 @@ import zipfile
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from vmf_disp_to_obj import (
     VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes,
-    build_clip_brushes_map, build_clip_brushes_map_opt,
+    build_clip_brushes_map, build_clip_brushes_map_strip, estimate_clip_strip,
 )
 from vmt_parser import parse_vmt, leaf_no_ext
 
@@ -450,6 +450,27 @@ def export_clip():
                      mimetype='text/plain')
 
 
+_MAX_CLIPNODES = 32767
+_clip_cache = {'vmf': None, 'pairs': None}
+
+
+def _clip_pairs():
+    """(DispSide, Mesh) pairs for the cached VMF, memoised so repeated estimate
+    calls during a slider drag don't re-parse + re-mesh the whole map each time."""
+    global _clip_cache
+    if _clip_cache['vmf'] != _last_vmf:
+        blocks = VMFParser(_last_vmf).parse()
+        sides  = extract_disp_sides(blocks)
+        pairs  = []
+        for ds in sides:
+            try:
+                pairs.append((ds, build_mesh(ds)))
+            except Exception:
+                pass
+        _clip_cache = {'vmf': _last_vmf, 'pairs': pairs}
+    return _clip_cache['pairs']
+
+
 @app.route('/export_clip_opt', methods=['POST'])
 def export_clip_opt():
     global _last_vmf
@@ -458,29 +479,32 @@ def export_clip_opt():
 
     depth = float(request.form.get('depth', 64.0))
     tex   = request.form.get('tex', 'CLIP').strip() or 'CLIP'
+    tol   = float(request.form.get('tol', 4.0))
+    estimate_only = request.form.get('estimate_only', 'false').lower() == 'true'
 
     try:
-        blocks = VMFParser(_last_vmf).parse()
-        sides  = extract_disp_sides(blocks)
+        pairs = _clip_pairs()
     except Exception as e:
         return jsonify({'error': f'VMF parse error: {e}'}), 400
 
-    if not sides:
+    if not pairs:
         return jsonify({'error': 'No displacements found in VMF'}), 400
 
-    pairs = []
-    for ds in sides:
-        try:
-            pairs.append((ds, build_mesh(ds)))
-        except Exception:
-            pass
+    if estimate_only:
+        st = estimate_clip_strip(pairs, tol=tol)
+        cn = st['faces'] * 3
+        return jsonify({
+            'brushes':   st['brushes'],
+            'faces':     st['faces'],
+            'clipnodes': cn,
+            'limit':     _MAX_CLIPNODES,
+            'headroom':  _MAX_CLIPNODES - cn,
+            'fits':      cn <= _MAX_CLIPNODES,
+        })
 
-    if not pairs:
-        return jsonify({'error': 'No meshes could be built'}), 400
+    map_text, _st = build_clip_brushes_map_strip(pairs, tol=tol, depth=depth, tex=tex)
 
-    map_text = build_clip_brushes_map_opt(pairs, depth=depth, tex=tex)
-
-    fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_clip_opt.map'
+    fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_clip_strip.map'
     buf = io.BytesIO(map_text.encode('utf-8'))
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=fname,
