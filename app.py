@@ -12,7 +12,7 @@ import zipfile
 from flask import Flask, request, jsonify, render_template, send_file, Response, stream_with_context
 from vmf_disp_to_obj import (
     VMFParser, extract_disp_sides, build_mesh, group_meshes, merge_meshes,
-    build_clip_brushes_map,
+    build_clip_brushes_map, build_clip_brushes_map_opt,
 )
 from vmt_parser import parse_vmt, leaf_no_ext
 
@@ -47,6 +47,8 @@ def process():
         blocks = parser.parse()
         sides  = extract_disp_sides(blocks)
         lights = extract_lights(blocks)
+        props  = extract_props(blocks)
+        fog    = extract_fog(blocks)
     except Exception as e:
         return jsonify({'error': f'VMF parse error: {e}'}), 400
 
@@ -149,10 +151,102 @@ def process():
         'warnings':    warnings,
         'groups':      out_groups,
         'lights':      lights,
+        'props':       props,
+        'fog':         fog,
     })
 
 
+def _parse_rgb255(s, default='200 200 200'):
+    parts = (s or default).split()
+    try:
+        r, g, b = float(parts[0]), float(parts[1]), float(parts[2])
+    except (IndexError, ValueError):
+        r, g, b = 200.0, 200.0, 200.0
+    return [round(r / 255.0, 4), round(g / 255.0, 4), round(b / 255.0, 4)]
+
+def extract_fog(blocks):
+    fog = None
+
+    def walk(node):
+        nonlocal fog
+        name = node.get('__name__', '')
+        if name == 'entity':
+            raw_cls = node.get('classname', '')
+            if isinstance(raw_cls, list): raw_cls = raw_cls[0]
+            cls = raw_cls.lower()
+            if cls == 'env_fog_controller':
+                color_str = node.get('fogcolor', '200 200 200')
+                if isinstance(color_str, list): color_str = color_str[0]
+                start = node.get('fogstart', '500')
+                end   = node.get('fogend',   '2000')
+                maxd  = node.get('fogmaxdensity', '1.0')
+                if isinstance(start, list): start = start[0]
+                if isinstance(end,   list): end   = end[0]
+                if isinstance(maxd,  list): maxd  = maxd[0]
+                fog = {
+                    'color':      _parse_rgb255(color_str),
+                    'start':      float(start or 500),
+                    'end':        float(end   or 2000),
+                    'maxDensity': float(maxd  or 1.0),
+                }
+            return
+        if name == 'world':
+            if node.get('fog_enable', '0') == '1':
+                color_str = node.get('fog_color', '200 200 200')
+                if isinstance(color_str, list): color_str = color_str[0]
+                start = node.get('fog_start', '500')
+                end   = node.get('fog_end',   '2000')
+                maxd  = node.get('fog_maxdensity', '1.0')
+                if isinstance(start, list): start = start[0]
+                if isinstance(end,   list): end   = end[0]
+                if isinstance(maxd,  list): maxd  = maxd[0]
+                fog = {
+                    'color':      _parse_rgb255(color_str),
+                    'start':      float(start or 500),
+                    'end':        float(end   or 2000),
+                    'maxDensity': float(maxd  or 1.0),
+                }
+            return
+        for val in node.values():
+            for item in (val if isinstance(val, list) else [val]):
+                if isinstance(item, dict):
+                    walk(item)
+
+    for b in blocks:
+        walk(b)
+    return fog
+
 _LIGHT_CLASSES = {'light', 'light_spot', 'light_environment', 'light_dynamic'}
+
+_PROP_CLASSES = {
+    'prop_static', 'prop_dynamic', 'prop_dynamic_override',
+    'prop_physics', 'prop_physics_override', 'prop_ragdoll', 'prop_detail',
+}
+
+def extract_props(blocks):
+    props = []
+
+    def walk(node):
+        name = node.get('__name__', '')
+        if name == 'entity':
+            raw_cls = node.get('classname', '')
+            if isinstance(raw_cls, list): raw_cls = raw_cls[0]
+            cls = raw_cls.lower()
+            if cls in _PROP_CLASSES:
+                origin = _parse_vec3f(node.get('origin', '0 0 0'))
+                model  = node.get('model', '')
+                if isinstance(model, list): model = model[0]
+                props.append({'classname': cls, 'origin': origin, 'model': model})
+            return
+
+        for val in node.values():
+            for item in (val if isinstance(val, list) else [val]):
+                if isinstance(item, dict):
+                    walk(item)
+
+    for b in blocks:
+        walk(b)
+    return props
 
 def _parse_color(s, default='255 255 255 200'):
     parts = (s or default).split()
@@ -350,6 +444,43 @@ def export_clip():
     map_text = build_clip_brushes_map(pairs, depth=depth, tex=tex)
 
     fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_clip.map'
+    buf = io.BytesIO(map_text.encode('utf-8'))
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=fname,
+                     mimetype='text/plain')
+
+
+@app.route('/export_clip_opt', methods=['POST'])
+def export_clip_opt():
+    global _last_vmf
+    if not _last_vmf:
+        return jsonify({'error': 'No VMF loaded — open a VMF in the viewer first'}), 400
+
+    depth = float(request.form.get('depth', 64.0))
+    tex   = request.form.get('tex', 'CLIP').strip() or 'CLIP'
+
+    try:
+        blocks = VMFParser(_last_vmf).parse()
+        sides  = extract_disp_sides(blocks)
+    except Exception as e:
+        return jsonify({'error': f'VMF parse error: {e}'}), 400
+
+    if not sides:
+        return jsonify({'error': 'No displacements found in VMF'}), 400
+
+    pairs = []
+    for ds in sides:
+        try:
+            pairs.append((ds, build_mesh(ds)))
+        except Exception:
+            pass
+
+    if not pairs:
+        return jsonify({'error': 'No meshes could be built'}), 400
+
+    map_text = build_clip_brushes_map_opt(pairs, depth=depth, tex=tex)
+
+    fname = (request.form.get('filename') or 'terrain').replace('.vmf', '') + '_clip_opt.map'
     buf = io.BytesIO(map_text.encode('utf-8'))
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=fname,

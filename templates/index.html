@@ -103,6 +103,9 @@
   #btn-lights.active   { background: #141e16; color: #5eda88; border-color: #1e5a30; }
   #btn-pick.active     { background: #201814; color: #f09050; border-color: #5a3018; }
   #btn-props.active    { background: #20141e; color: #f080c0; border-color: #5a1840; }
+  #btn-fog.active      { background: #141824; color: #88bbff; border-color: #2a3a6a; }
+  #btn-fog.has-fog     { color: #557; }
+  #btn-fog:not(.has-fog) { opacity: .4; }
 
   /* Asset buttons — slightly more visible */
   .tb-asset { color: #555; }
@@ -825,6 +828,7 @@
     <button id="btn-lights"  class="tb-btn tb-toggle" title="Show light entities">◉ Lights</button>
     <button id="btn-props"   class="tb-btn tb-toggle" title="Show prop entities">⬡ Props</button>
     <button id="btn-reset"   class="tb-btn"           title="Reset camera view">↺ Reset</button>
+    <button id="btn-fog"     class="tb-btn tb-toggle" title="Toggle scene fog (loaded from VMF env_fog_controller)">≋ Fog</button>
   </div>
 
   <div class="tb-divider"></div>
@@ -845,7 +849,8 @@
     <button id="btn-pick"  class="tb-btn tb-toggle" disabled title="Pick a displacement tile">⊕ Picker</button>
     <button id="btn-bake"  class="tb-btn" disabled title="Bake textures and export for Blender / GoldSrc">⚡ Bake</button>
     <button id="btn-smd"   class="tb-btn" disabled title="Export SMD + QC for GoldSrc studiomdl">▤ SMD</button>
-    <button id="btn-clip"  class="tb-btn" disabled title="Export clip brushes as Valve MAP for GoldSrc collision">⬡ Clip MAP</button>
+    <button id="btn-clip"  class="tb-btn" disabled title="Export clip brushes as Valve MAP for GoldSrc collision (max accuracy, one prism per triangle)">⬡ Clip MAP</button>
+    <button id="btn-clip-opt" class="tb-btn" disabled title="Export optimised clip brushes — one convex-hull brush per displacement tile, ~90% fewer clipnodes">⬡ Opt Clip</button>
   </div>
 
   <div class="tb-divider"></div>
@@ -1189,7 +1194,9 @@ scene.add(ambientLight);
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(5000, 8000, 3000);
 scene.add(sun);
-let flatLight = false;
+let flatLight  = false;
+let fogParams  = null;
+let fogEnabled = false;
 
 // Grid
 const grid = new THREE.GridHelper(50000, 100, 0x222233, 0x1a1a28);
@@ -1400,6 +1407,12 @@ function leafNoExt(path) {
   return name.includes('.') ? name.replace(/\.[^.]+$/, '') : name;
 }
 
+function vmtFlag(vmt, key) {
+  if (!vmt) return false;
+  const v = vmt[key];
+  return v !== undefined && v !== '0' && v !== 'false' && v !== '';
+}
+
 // GLSL blend shader — triplanar mapping to eliminate stretching on steep faces
 const BLEND_VERT = `
   attribute float vBlendAlpha;
@@ -1425,6 +1438,12 @@ const BLEND_FRAG = `
   uniform float uHasTex2;
   uniform float uHasBlend;
   uniform float uFlat;
+  uniform float uTranslucent;
+  uniform float uFogEnabled;
+  uniform vec3  uFogColor;
+  uniform float uFogStart;
+  uniform float uFogEnd;
+  uniform float uFogMaxDensity;
   uniform vec2  uTexSize;
   uniform vec2  uTexSize2;
   varying vec3  vWorldPos;
@@ -1433,12 +1452,12 @@ const BLEND_FRAG = `
   varying vec3  vWorldNorm;
   varying vec2  vUv;
 
-  vec3 triplanar(sampler2D tex, vec3 pos, vec3 n, float scale) {
+  vec4 triplanar(sampler2D tex, vec3 pos, vec3 n, float scale) {
     vec3 w = pow(abs(n), vec3(6.0));
     w /= (w.x + w.y + w.z + 0.0001);
-    vec3 cX = texture2D(tex, vec2(-pos.z,  pos.y) * scale).rgb;
-    vec3 cY = texture2D(tex, vec2( pos.x, -pos.z) * scale).rgb;
-    vec3 cZ = texture2D(tex, vec2( pos.x,  pos.y) * scale).rgb;
+    vec4 cX = texture2D(tex, vec2(-pos.z,  pos.y) * scale);
+    vec4 cY = texture2D(tex, vec2( pos.x, -pos.z) * scale);
+    vec4 cZ = texture2D(tex, vec2( pos.x,  pos.y) * scale);
     return cX * w.x + cY * w.y + cZ * w.z;
   }
 
@@ -1447,20 +1466,29 @@ const BLEND_FRAG = `
     vec3 lightDir = normalize(vec3(0.6, 1.0, 0.4));
     float diff = uFlat > 0.5 ? 1.0 : clamp(dot(normalize(vViewNorm), lightDir), 0.0, 1.0) * 0.7 + 0.3;
 
-    vec3 c1, c2;
+    vec4 s1, s2;
     if (uScale > 0.0) {
-      c1 = uHasTex1 > 0.5 ? triplanar(uTex1, vWorldPos, n, uScale) : vec3(0.55);
-      c2 = uHasTex2 > 0.5 ? triplanar(uTex2, vWorldPos, n, uScale) : vec3(0.55);
+      s1 = uHasTex1 > 0.5 ? triplanar(uTex1, vWorldPos, n, uScale) : vec4(0.55, 0.55, 0.55, 1.0);
+      s2 = uHasTex2 > 0.5 ? triplanar(uTex2, vWorldPos, n, uScale) : vec4(0.55, 0.55, 0.55, 1.0);
     } else {
       // Both textures share the same UV axes in Source — normalize once
       vec2 baseSize = uTexSize.x > 0.0 ? uTexSize : uTexSize2;
       vec2 normUv   = baseSize.x > 0.0 ? vUv / baseSize : vUv * 0.002;
-      c1 = uHasTex1 > 0.5 ? texture2D(uTex1, normUv).rgb : vec3(0.55);
-      c2 = uHasTex2 > 0.5 ? texture2D(uTex2, normUv).rgb : vec3(0.55);
+      s1 = uHasTex1 > 0.5 ? texture2D(uTex1, normUv) : vec4(0.55, 0.55, 0.55, 1.0);
+      s2 = uHasTex2 > 0.5 ? texture2D(uTex2, normUv) : vec4(0.55, 0.55, 0.55, 1.0);
     }
 
-    vec3 color = uHasBlend > 0.5 ? mix(c1, c2, clamp(vAlpha, 0.0, 1.0)) : c1;
-    gl_FragColor = vec4(color * diff, 1.0);
+    vec3 color = uHasBlend > 0.5 ? mix(s1.rgb, s2.rgb, clamp(vAlpha, 0.0, 1.0)) : s1.rgb;
+    float alpha = uTranslucent > 0.5 ? s1.a : 1.0;
+
+    float fogFactor = 0.0;
+    if (uFogEnabled > 0.5) {
+      float dist = length(vWorldPos - cameraPosition);
+      fogFactor = clamp((dist - uFogStart) / max(uFogEnd - uFogStart, 1.0), 0.0, uFogMaxDensity);
+    }
+    vec3 litColor = mix(color * diff, uFogColor, fogFactor);
+    alpha *= (1.0 - fogFactor);
+    gl_FragColor = vec4(litColor, alpha);
   }
 `;
 
@@ -1638,6 +1666,7 @@ function buildScene(data) {
   applyTextures();
   buildLightHelpers(data.lights || []);
   buildPropHelpers(data.props || []);
+  applyFogData(data.fog || null);
   markDirty();
 }
 
@@ -1762,6 +1791,44 @@ function updateWireframes() {
     }
   });
 }
+
+// ── Fog ───────────────────────────────────────────────────────────────────────
+function applyFogData(fog) {
+  fogParams = fog || null;
+  fogEnabled = !!fogParams;
+  const btn = document.getElementById('btn-fog');
+  btn.classList.toggle('has-fog', !!fogParams);
+  btn.classList.toggle('active', fogEnabled);
+  if (fogParams) {
+    btn.title = `Fog: start=${fogParams.start}, end=${fogParams.end} (from VMF)`;
+  } else {
+    btn.title = 'No fog controller found in VMF';
+  }
+}
+
+function updateFogUniforms() {
+  const on = (fogEnabled && fogParams) ? 1.0 : 0.0;
+  groupMeshes.forEach(m => {
+    if (!m || !m.material || !m.material.isShaderMaterial) return;
+    const u = m.material.uniforms;
+    if (u.uFogEnabled === undefined) return;
+    u.uFogEnabled.value = on;
+    if (fogParams) {
+      u.uFogColor.value.set(...fogParams.color);
+      u.uFogStart.value      = fogParams.start;
+      u.uFogEnd.value        = fogParams.end;
+      u.uFogMaxDensity.value = fogParams.maxDensity;
+    }
+  });
+  markDirty();
+}
+
+document.getElementById('btn-fog').addEventListener('click', function () {
+  if (!fogParams) return;
+  fogEnabled = !fogEnabled;
+  this.classList.toggle('active', fogEnabled);
+  updateFogUniforms();
+});
 
 document.getElementById('btn-flat').addEventListener('click', function () {
   flatLight = !flatLight;
@@ -1971,7 +2038,7 @@ document.getElementById('tex-input').addEventListener('change', e => {
 // Source: ft=south(-Y in Three), bk=north(+Y), lf=east(+X), rt=west(-X), up=+Z→+Y three, dn=-Y three
 // Empirically: Three.js CubeTexture [px, nx, py, ny, pz, nz]
 // Source→Three mapping: rt→px(0), lf→nx(1), up→py(2), dn→ny(3), ft→pz(4), bk→nz(5)
-const SKY_SUFFIX_TO_SLOT = { rt:0, lf:1, up:2, dn:3, ft:4, bk:5 };
+const SKY_SUFFIX_TO_SLOT = { rt:0, lf:1, up:2, dn:3, ft:5, bk:4 };
 let skyTexture = null;
 
 document.getElementById('btn-sky').addEventListener('click', () => {
@@ -2007,21 +2074,39 @@ document.getElementById('sky-input').addEventListener('change', e => {
   e.target.value = '';
 });
 
-function applySkybox(slots, total) {
-  // Build a CubeTexture from whatever slots were filled
+async function applySkybox(slots, total) {
   const filled = slots.filter(Boolean).length;
   if (!filled) return;
 
-  // Fill missing slots with a tiny black canvas so Three.js doesn't error
   const blank = document.createElement('canvas');
   blank.width = blank.height = 2;
   const bctx = blank.getContext('2d');
   bctx.fillStyle = '#000'; bctx.fillRect(0,0,2,2);
 
-  const images = slots.map(img => img || blank);
+  async function processSlot(img, i) {
+    if (!img) return blank;
+    // up (slot 2) and dn (slot 3) need vertical flip to align with Three.js py/ny convention
+    if (i === 2 || i === 3) {
+      const w = img.naturalWidth || img.width || 512;
+      const h = img.naturalHeight || img.height || 512;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.translate(0, h);
+      ctx.scale(1, -1);
+      ctx.drawImage(img, 0, 0);
+      return await createImageBitmap(c);
+    }
+    return img;
+  }
+
+  const images = await Promise.all(slots.map(processSlot));
 
   if (skyTexture) skyTexture.dispose();
   skyTexture = new THREE.CubeTexture(images);
+  skyTexture.minFilter  = THREE.LinearFilter;
+  skyTexture.magFilter  = THREE.LinearFilter;
+  skyTexture.generateMipmaps = false;
   skyTexture.needsUpdate = true;
   scene.background = skyTexture;
 
@@ -2048,21 +2133,33 @@ function makeBlendMaterial(vmt, grp) {
   const hasBlend = !!(tex2 && leaf2);
   const sz1    = loadedSizes[leaf1] || { w: 0, h: 0 };
   const sz2    = loadedSizes[leaf2] || { w: 0, h: 0 };
+  const additive    = vmtFlag(vmt, '$additive');
+  const translucent = vmtFlag(vmt, '$translucent');
+  const needsAlpha  = additive || translucent;
   const mat = new THREE.ShaderMaterial({
     vertexShader:   BLEND_VERT,
     fragmentShader: BLEND_FRAG,
     uniforms: {
-      uTex1:     { value: tex1 },
-      uTex2:     { value: tex2 },
-      uScale:    { value: sc },
-      uTexSize:  { value: new THREE.Vector2(sz1.w, sz1.h) },
-      uTexSize2: { value: new THREE.Vector2(sz2.w, sz2.h) },
-      uHasTex1:  { value: tex1 ? 1.0 : 0.0 },
-      uHasTex2:  { value: tex2 ? 1.0 : 0.0 },
-      uHasBlend: { value: hasBlend ? 1.0 : 0.0 },
-      uFlat:     { value: flatLight ? 1.0 : 0.0 },
+      uTex1:        { value: tex1 },
+      uTex2:        { value: tex2 },
+      uScale:       { value: sc },
+      uTexSize:     { value: new THREE.Vector2(sz1.w, sz1.h) },
+      uTexSize2:    { value: new THREE.Vector2(sz2.w, sz2.h) },
+      uHasTex1:     { value: tex1 ? 1.0 : 0.0 },
+      uHasTex2:     { value: tex2 ? 1.0 : 0.0 },
+      uHasBlend:      { value: hasBlend ? 1.0 : 0.0 },
+      uFlat:          { value: flatLight ? 1.0 : 0.0 },
+      uTranslucent:   { value: translucent ? 1.0 : 0.0 },
+      uFogEnabled:    { value: (fogEnabled && fogParams) ? 1.0 : 0.0 },
+      uFogColor:      { value: new THREE.Vector3(...(fogParams ? fogParams.color : [0.5, 0.5, 0.5])) },
+      uFogStart:      { value: fogParams ? fogParams.start      : 500.0 },
+      uFogEnd:        { value: fogParams ? fogParams.end        : 2000.0 },
+      uFogMaxDensity: { value: fogParams ? fogParams.maxDensity : 1.0 },
     },
     side: THREE.DoubleSide,
+    blending:    additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    transparent: needsAlpha,
+    depthWrite:  !needsAlpha,
   });
   return mat;
 }
@@ -2093,6 +2190,7 @@ function applyTextures() {
         mesh.material.needsUpdate = true;
       }
     }
+
 
     // Sidebar dot
     const dot = document.querySelectorAll('.group-item')[i]?.querySelector('.group-dot');
@@ -2140,6 +2238,7 @@ function clearScene() {
   document.getElementById('btn-bake').disabled = true;
   document.getElementById('btn-smd').disabled = true;
   document.getElementById('btn-clip').disabled = true;
+  document.getElementById('btn-clip-opt').disabled = true;
   document.getElementById('btn-clear').style.display = 'none';
   document.getElementById('btn-vmt').textContent = '≡ VMTs';
   document.getElementById('btn-tex').textContent = '▣ Textures';
@@ -3224,6 +3323,37 @@ document.getElementById('btn-clip').addEventListener('click', async () => {
   }
 });
 
+// ── Optimised Clip MAP export ─────────────────────────────────────────────
+document.getElementById('btn-clip-opt').addEventListener('click', async () => {
+  if (!lastData) return;
+  const btn = document.getElementById('btn-clip-opt');
+  btn.disabled = true;
+  btn.textContent = '⬡ Exporting…';
+  try {
+    const fd = new FormData();
+    fd.append('filename', lastData.filename || 'terrain');
+    fd.append('depth', '64');
+    fd.append('tex', 'CLIP');
+    const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = (lastData.filename || 'terrain').replace(/\.vmf$/i, '') + '_clip_opt.map';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Opt Clip export failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬡ Opt Clip';
+  }
+});
+
 async function _smdExport() {
   const uvMode      = document.getElementById('smd-uv-mode').value;
   const meshPerFile = parseInt(document.getElementById('smd-meshes-per-file').value) || 255;
@@ -3429,6 +3559,7 @@ async function processFile(file) {
     document.getElementById('btn-bake').disabled = false;
     document.getElementById('btn-smd').disabled = false;
     document.getElementById('btn-clip').disabled = false;
+    document.getElementById('btn-clip-opt').disabled = false;
     document.getElementById('btn-clear').style.display = '';
     buildScene(data);
     buildGroupList(data);
