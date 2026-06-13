@@ -490,6 +490,18 @@ def export_clip_opt():
     if not pairs:
         return jsonify({'error': 'No displacements found in VMF'}), 400
 
+    # Optional scope filter: only clip the given (solid_id, side_id) tiles
+    # (e.g. the currently-visible material in the viewer).
+    sides_json = request.form.get('sides', '').strip()
+    if sides_json:
+        try:
+            wanted = set((int(a), int(b)) for a, b in json.loads(sides_json))
+            pairs = [(ds, m) for ds, m in pairs if (ds.solid_id, ds.side_id) in wanted]
+        except Exception:
+            pass
+        if not pairs:
+            return jsonify({'error': 'No displacements in the selected scope'}), 400
+
     if estimate_only:
         st = estimate_clip_strip(pairs, tol=tol)
         cn = st['faces'] * 3

@@ -951,6 +951,13 @@
   <div id="clip-opt-modal" style="display:none;position:fixed;z-index:1000;width:300px">
     <div class="esm-header">Strip Clip <span id="clip-fit-tag">—</span></div>
     <div class="esm-section">
+      <div class="esm-label">Scope</div>
+      <div class="esm-radio-group">
+        <label class="esm-radio"><input type="radio" name="clip-scope" value="all" checked> All displacements</label>
+        <label class="esm-radio"><input type="radio" name="clip-scope" value="visible"> Visible only <small>material filter</small></label>
+      </div>
+    </div>
+    <div class="esm-section">
       <div class="esm-label">Surface tolerance</div>
       <div class="esm-row">
         <input type="range" id="clip-tol" min="0" max="512" step="2" value="64" style="flex:1;accent-color:#4a6cf7">
@@ -3422,6 +3429,21 @@ function syncTol(src) {
 }
 clipTol.addEventListener('input',    () => syncTol(clipTol));
 clipTolNum.addEventListener('input', () => syncTol(clipTolNum));
+document.querySelectorAll('input[name="clip-scope"]').forEach(r =>
+  r.addEventListener('change', requestClipEstimate));
+
+// Collect (solid_id, side_id) pairs for the chosen scope. Returns null for "all".
+function clipScopeSides() {
+  const scope = document.querySelector('input[name="clip-scope"]:checked')?.value || 'all';
+  if (scope !== 'visible' || !lastData) return null;
+  const out = [];
+  lastData.groups.forEach((g, i) => {
+    if (groupMeshes[i] && groupMeshes[i].visible !== false) {
+      (g.solid_ids || []).forEach(pair => out.push(pair));
+    }
+  });
+  return out;
+}
 
 let clipEstTimer = null, clipEstSeq = 0;
 function requestClipEstimate() {
@@ -3436,6 +3458,8 @@ async function doClipEstimate() {
   const fd = new FormData();
   fd.append('tol', clipTolNum.value || '0');
   fd.append('estimate_only', 'true');
+  const sides = clipScopeSides();
+  if (sides) fd.append('sides', JSON.stringify(sides));
   try {
     const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
     const j = await res.json();
@@ -3468,6 +3492,8 @@ document.getElementById('btn-clip-export').addEventListener('click', async () =>
     fd.append('depth', '64');
     fd.append('tex', 'CLIP');
     fd.append('tol', clipTolNum.value || '0');
+    const sides = clipScopeSides();
+    if (sides) fd.append('sides', JSON.stringify(sides));
     const res = await fetch('/export_clip_opt', { method: 'POST', body: fd });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
