@@ -157,6 +157,7 @@ def process():
 
 
 def _parse_rgb255(s, default='200 200 200'):
+    if isinstance(s, list): s = s[0] if s else default   # duplicate key → coerce
     parts = (s or default).split()
     try:
         r, g, b = float(parts[0]), float(parts[1]), float(parts[2])
@@ -249,6 +250,7 @@ def extract_props(blocks):
     return props
 
 def _parse_color(s, default='255 255 255 200'):
+    if isinstance(s, list): s = s[0] if s else default   # duplicate key → coerce
     parts = (s or default).split()
     try:
         r, g, b = float(parts[0]), float(parts[1]), float(parts[2])
@@ -258,6 +260,7 @@ def _parse_color(s, default='255 255 255 200'):
     return [round(r / 255.0, 4), round(g / 255.0, 4), round(b / 255.0, 4)], brightness
 
 def _parse_vec3f(s, default='0 0 0'):
+    if isinstance(s, list): s = s[0] if s else default   # duplicate key → coerce
     parts = (s or default).split()
     try:
         return [float(parts[0]), float(parts[1]), float(parts[2])]

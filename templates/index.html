@@ -303,6 +303,44 @@
   #btn-tex.has-tex { border-color: #2a4a6a !important; color: #7aadff !important; background: #1a1e30 !important; }
   #btn-vmt.has-vmt { border-color: #4a3a1a !important; color: #e8c84a !important; background: #201e14 !important; }
   #btn-sky.has-sky { border-color: #1a3a2a !important; color: #5adba0 !important; background: #141e1a !important; }
+  #btn-auto { border-color: #2a3a5a; color: #9ab4ff; }
+  #btn-auto.busy { opacity: .6; pointer-events: none; }
+  #btn-auto.has-auto { border-color: #24406a !important; color: #7aadff !important; background: #16203a !important; }
+
+  /* ── Auto-load report panel ─────────────────────────────── */
+  #auto-report {
+    display: none;
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: 340px;
+    max-height: 60vh;
+    background: #18181f;
+    border: 1px solid #2a2a38;
+    border-radius: 10px;
+    box-shadow: 0 12px 48px rgba(0,0,0,.7);
+    z-index: 300;
+    overflow: hidden;
+    font-size: 12px;
+  }
+  #auto-report.open { display: block; }
+  #auto-report .ar-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 14px;
+    font-weight: 600; color: #fff;
+    border-bottom: 1px solid #222;
+  }
+  #auto-report .ar-head.ok  { color: #5eda88; }
+  #auto-report .ar-head.warn { color: #f0c070; }
+  #auto-report .ar-close { cursor: pointer; color: #666; font-size: 15px; line-height: 1; }
+  #auto-report .ar-close:hover { color: #fff; }
+  #auto-report .ar-body { padding: 10px 14px; overflow-y: auto; max-height: calc(60vh - 44px); }
+  #auto-report .ar-line { color: #bbb; line-height: 1.7; }
+  #auto-report .ar-line.stat { color: #ddd; }
+  #auto-report .ar-line.warn { color: #f0a860; }
+  #auto-report .ar-line.err  { color: #f07070; }
+  #auto-report .ar-body::-webkit-scrollbar { width: 5px; }
+  #auto-report .ar-body::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
   .tb-clear { color: #553; }
   .tb-clear:hover { background: #2a1414 !important; color: #f07070 !important; border-color: #5a2020 !important; }
 
@@ -865,8 +903,9 @@
 
   <!-- Asset loaders -->
   <div class="tb-group">
-    <button id="btn-vmt" class="tb-btn tb-asset" title="Load VMT material files">≡ VMTs</button>
-    <button id="btn-tex" class="tb-btn tb-asset" title="Load texture images">▣ Textures</button>
+    <button id="btn-auto" class="tb-btn tb-asset" title="Auto-load all VMTs &amp; textures from a decompiled map folder">📁 Auto Load</button>
+    <button id="btn-vmt" class="tb-btn tb-asset" title="Load VMT material files manually">≡ VMTs</button>
+    <button id="btn-tex" class="tb-btn tb-asset" title="Load texture images manually">▣ Textures</button>
     <button id="btn-sky" class="tb-btn tb-asset" title="Load 6 skybox images (ft/bk/lf/rt/up/dn)">⬡ Sky</button>
   </div>
 
@@ -991,7 +1030,14 @@
   <input type="file" id="file-input" accept=".vmf" style="display:none">
   <input type="file" id="tex-input" accept=".bmp,.png,.jpg,.jpeg" multiple style="display:none">
   <input type="file" id="vmt-input" accept=".vmt" multiple style="display:none">
+  <input type="file" id="folder-input" webkitdirectory directory multiple style="display:none">
   <input type="file" id="sky-input" accept=".bmp,.png,.jpg,.jpeg,.tga" multiple style="display:none">
+</div>
+
+<!-- Auto-load results panel -->
+<div id="auto-report">
+  <div class="ar-head"><span id="ar-title">Assets</span><span class="ar-close" id="ar-close">✕</span></div>
+  <div class="ar-body" id="ar-body"></div>
 </div>
 
 <!-- Import modal -->
@@ -1483,6 +1529,20 @@ function vmtFlag(vmt, key) {
   return v !== undefined && v !== '0' && v !== 'false' && v !== '';
 }
 
+// Parse a Source color param into an RGB multiplier.
+//   "[a b c]"  → float multipliers as-is (HDR, may exceed 1)
+//   "{a b c}"  → 0–255 ints, divided by 255
+// Missing/blank → [1,1,1] (no tint).
+function vmtColor(vmt, key) {
+  const v = vmt && vmt[key];
+  if (!v) return [1, 1, 1];
+  const is255 = v.includes('{');
+  const nums = v.replace(/[\[\]{}]/g, ' ').trim().split(/\s+/).map(parseFloat).filter(x => !isNaN(x));
+  if (nums.length < 3) return [1, 1, 1];
+  const c = nums.slice(0, 3);
+  return is255 ? c.map(x => x / 255) : c;
+}
+
 // GLSL blend shader — triplanar mapping to eliminate stretching on steep faces
 const BLEND_VERT = `
   attribute float vBlendAlpha;
@@ -1509,6 +1569,8 @@ const BLEND_FRAG = `
   uniform float uHasBlend;
   uniform float uFlat;
   uniform float uTranslucent;
+  uniform vec3  uColor1;
+  uniform vec3  uColor2;
   uniform float uFogEnabled;
   uniform vec3  uFogColor;
   uniform float uFogStart;
@@ -1548,6 +1610,12 @@ const BLEND_FRAG = `
       s2 = uHasTex2 > 0.5 ? texture2D(uTex2, normUv) : vec4(0.55, 0.55, 0.55, 1.0);
     }
 
+    // Linearize sRGB texels before shading. Source blends & lights in linear
+    // space; doing it in gamma space is what makes the transition look muddy and
+    // the midtones washed out. $color/$color2 are linear HDR multipliers.
+    s1.rgb = pow(s1.rgb, vec3(2.2)) * uColor1;
+    s2.rgb = pow(s2.rgb, vec3(2.2)) * uColor2;
+
     vec3 color = uHasBlend > 0.5 ? mix(s1.rgb, s2.rgb, clamp(vAlpha, 0.0, 1.0)) : s1.rgb;
     float alpha = uTranslucent > 0.5 ? s1.a : 1.0;
 
@@ -1556,8 +1624,11 @@ const BLEND_FRAG = `
       float dist = length(vWorldPos - cameraPosition);
       fogFactor = clamp((dist - uFogStart) / max(uFogEnd - uFogStart, 1.0), 0.0, uFogMaxDensity);
     }
-    vec3 litColor = mix(color * diff, uFogColor, fogFactor);
+    vec3 litColor = mix(color * diff, pow(uFogColor, vec3(2.2)), fogFactor);
     alpha *= (1.0 - fogFactor);
+    // Re-encode linear → sRGB for display (round-trips flat colors unchanged,
+    // but blends/lighting are now computed correctly in between).
+    litColor = pow(max(litColor, 0.0), vec3(1.0 / 2.2));
     gl_FragColor = vec4(litColor, alpha);
   }
 `;
@@ -2104,6 +2175,296 @@ document.getElementById('tex-input').addEventListener('change', e => {
   e.target.value = '';
 });
 
+// ── VTF (Valve Texture Format) decoder ────────────────────────────────────────
+// Decodes the full-resolution mip (level 0) of a .vtf into a canvas. Covers the
+// formats used by virtually all Source terrain art: DXT1/3/5 (+ 1-bit-alpha
+// DXT1) and the common uncompressed BGR/RGB variants. Everything else throws a
+// clear "unsupported format" so the caller can report it.
+const VTF_FMT = {
+  RGBA8888: 0, ABGR8888: 1, RGB888: 2, BGR888: 3, RGB565: 4, I8: 5, IA88: 6,
+  A8: 8, ARGB8888: 11, BGRA8888: 12, DXT1: 13, DXT3: 14, DXT5: 15,
+  BGRX8888: 16, BGR565: 17, DXT1_ONEBITALPHA: 20,
+};
+const VTF_FMT_NAME = Object.fromEntries(Object.entries(VTF_FMT).map(([k, v]) => [v, k]));
+
+// Bytes occupied by one mip level of the given format at w×h.
+function _vtfBlockBytes(fmt, w, h) {
+  const bw = Math.max(1, (w + 3) >> 2), bh = Math.max(1, (h + 3) >> 2);
+  switch (fmt) {
+    case VTF_FMT.DXT1: case VTF_FMT.DXT1_ONEBITALPHA: return bw * bh * 8;
+    case VTF_FMT.DXT3: case VTF_FMT.DXT5:              return bw * bh * 16;
+    case VTF_FMT.RGBA8888: case VTF_FMT.ABGR8888: case VTF_FMT.ARGB8888:
+    case VTF_FMT.BGRA8888: case VTF_FMT.BGRX8888:      return w * h * 4;
+    case VTF_FMT.RGB888: case VTF_FMT.BGR888:          return w * h * 3;
+    case VTF_FMT.RGB565: case VTF_FMT.BGR565: case VTF_FMT.IA88: return w * h * 2;
+    case VTF_FMT.I8: case VTF_FMT.A8:                  return w * h;
+    default: return -1; // unsupported
+  }
+}
+
+function _vtfDecodeDXT(fmt, data, off, w, h, out) {
+  const bw = Math.max(1, (w + 3) >> 2), bh = Math.max(1, (h + 3) >> 2);
+  const dxt3 = fmt === VTF_FMT.DXT3, dxt5 = fmt === VTF_FMT.DXT5;
+  const dxt1 = fmt === VTF_FMT.DXT1 || fmt === VTF_FMT.DXT1_ONEBITALPHA;
+  let p = off;
+  const alpha = new Uint8Array(16);
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      let hasAlpha = false;
+      if (dxt3) {
+        for (let i = 0; i < 8; i++) { const b = data[p + i]; alpha[i * 2] = (b & 0x0f) * 17; alpha[i * 2 + 1] = (b >> 4) * 17; }
+        hasAlpha = true; p += 8;
+      } else if (dxt5) {
+        const a0 = data[p], a1 = data[p + 1];
+        const al = [a0, a1];
+        if (a0 > a1) { for (let i = 1; i < 7; i++) al.push(Math.round(((7 - i) * a0 + i * a1) / 7)); }
+        else { for (let i = 1; i < 5; i++) al.push(Math.round(((5 - i) * a0 + i * a1) / 5)); al.push(0); al.push(255); }
+        let lo = 0;
+        for (let i = 0; i < 6; i++) lo += data[p + 2 + i] * Math.pow(2, 8 * i);
+        for (let i = 0; i < 16; i++) alpha[i] = al[Math.floor(lo / Math.pow(2, 3 * i)) & 7];
+        hasAlpha = true; p += 8;
+      }
+      const c0 = data[p] | (data[p + 1] << 8);
+      const c1 = data[p + 2] | (data[p + 3] << 8);
+      const lut = (data[p + 4] | (data[p + 5] << 8) | (data[p + 6] << 16) | (data[p + 7] << 24)) >>> 0;
+      p += 8;
+      const r0 = ((c0 >> 11) & 31) * 255 / 31, g0 = ((c0 >> 5) & 63) * 255 / 63, b0 = (c0 & 31) * 255 / 31;
+      const r1 = ((c1 >> 11) & 31) * 255 / 31, g1 = ((c1 >> 5) & 63) * 255 / 63, b1 = (c1 & 31) * 255 / 31;
+      const col = [[r0, g0, b0, 255], [r1, g1, b1, 255], null, null];
+      if (dxt1 && !hasAlpha && c0 <= c1) {
+        col[2] = [(r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2, 255];
+        col[3] = [0, 0, 0, 0];
+      } else {
+        col[2] = [(2 * r0 + r1) / 3, (2 * g0 + g1) / 3, (2 * b0 + b1) / 3, 255];
+        col[3] = [(r0 + 2 * r1) / 3, (g0 + 2 * g1) / 3, (b0 + 2 * b1) / 3, 255];
+      }
+      for (let ty = 0; ty < 4; ty++) {
+        for (let tx = 0; tx < 4; tx++) {
+          const px = bx * 4 + tx, py = by * 4 + ty;
+          if (px >= w || py >= h) continue;
+          const c = col[(lut >>> (2 * (ty * 4 + tx))) & 3];
+          const o = (py * w + px) * 4;
+          out[o] = c[0]; out[o + 1] = c[1]; out[o + 2] = c[2];
+          out[o + 3] = hasAlpha ? alpha[ty * 4 + tx] : c[3];
+        }
+      }
+    }
+  }
+}
+
+function _vtfDecodeRaw(fmt, data, off, w, h, out) {
+  let p = off;
+  const n = w * h;
+  for (let i = 0; i < n; i++) {
+    let r = 0, g = 0, b = 0, a = 255, v;
+    switch (fmt) {
+      case VTF_FMT.RGBA8888: r = data[p]; g = data[p + 1]; b = data[p + 2]; a = data[p + 3]; p += 4; break;
+      case VTF_FMT.ABGR8888: a = data[p]; b = data[p + 1]; g = data[p + 2]; r = data[p + 3]; p += 4; break;
+      case VTF_FMT.ARGB8888: a = data[p]; r = data[p + 1]; g = data[p + 2]; b = data[p + 3]; p += 4; break;
+      case VTF_FMT.BGRA8888: b = data[p]; g = data[p + 1]; r = data[p + 2]; a = data[p + 3]; p += 4; break;
+      case VTF_FMT.BGRX8888: b = data[p]; g = data[p + 1]; r = data[p + 2]; a = 255; p += 4; break;
+      case VTF_FMT.RGB888:   r = data[p]; g = data[p + 1]; b = data[p + 2]; p += 3; break;
+      case VTF_FMT.BGR888:   b = data[p]; g = data[p + 1]; r = data[p + 2]; p += 3; break;
+      case VTF_FMT.RGB565:   v = data[p] | (data[p + 1] << 8); r = ((v >> 11) & 31) * 255 / 31; g = ((v >> 5) & 63) * 255 / 63; b = (v & 31) * 255 / 31; p += 2; break;
+      case VTF_FMT.BGR565:   v = data[p] | (data[p + 1] << 8); b = ((v >> 11) & 31) * 255 / 31; g = ((v >> 5) & 63) * 255 / 63; r = (v & 31) * 255 / 31; p += 2; break;
+      case VTF_FMT.IA88:     r = g = b = data[p]; a = data[p + 1]; p += 2; break;
+      case VTF_FMT.I8:       r = g = b = data[p]; p += 1; break;
+      case VTF_FMT.A8:       r = g = b = 255; a = data[p]; p += 1; break;
+      default: return false;
+    }
+    const o = i * 4; out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = a;
+  }
+  return true;
+}
+
+// Returns { canvas, width, height }. Throws Error with a human-readable reason.
+function decodeVTF(buf) {
+  if (buf.byteLength < 64) throw new Error('file too small');
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  if (u8[0] !== 0x56 || u8[1] !== 0x54 || u8[2] !== 0x46 || u8[3] !== 0x00)
+    throw new Error('not a VTF (bad signature)');
+  const headerSize = dv.getUint32(12, true);
+  const width  = dv.getUint16(16, true);
+  const height = dv.getUint16(18, true);
+  const hiFmt  = dv.getInt32(52, true);
+  if (!width || !height) throw new Error('zero dimensions');
+  const blk = _vtfBlockBytes(hiFmt, width, height);
+  const fmtName = VTF_FMT_NAME[hiFmt] || ('format ' + hiFmt);
+  if (blk < 0) throw new Error('unsupported ' + fmtName);
+  // The mip-0 (full-res) block for the last frame/face is the final `blk` bytes
+  // of the file — true for the single-frame 2D textures used by terrain, and a
+  // valid still frame otherwise. Avoids parsing 7.3 resource directories.
+  const off = buf.byteLength - blk;
+  if (off < headerSize) throw new Error('truncated ' + fmtName + ' data');
+  const out = new Uint8ClampedArray(width * height * 4);
+  const isDXT = hiFmt === VTF_FMT.DXT1 || hiFmt === VTF_FMT.DXT1_ONEBITALPHA ||
+                hiFmt === VTF_FMT.DXT3 || hiFmt === VTF_FMT.DXT5;
+  if (isDXT) _vtfDecodeDXT(hiFmt, u8, off, width, height, out);
+  else if (!_vtfDecodeRaw(hiFmt, u8, off, width, height, out)) throw new Error('unsupported ' + fmtName);
+  const cv = document.createElement('canvas');
+  cv.width = width; cv.height = height;
+  cv.getContext('2d').putImageData(new ImageData(out, width, height), 0, 0);
+  return { canvas: cv, width, height };
+}
+
+// ── Auto-load an entire decompiled map folder ─────────────────────────────────
+// Register a decoded canvas into the same stores the manual texture loader uses,
+// storing a PNG File so the OBJ/bake export ships a readable image (not raw VTF).
+function _registerCanvasTexture(leaf, canvas, w, h) {
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1 / w, 1 / h);
+  tex.anisotropy      = renderer.capabilities.getMaxAnisotropy();
+  tex.generateMipmaps = true;
+  tex.minFilter       = THREE.LinearMipmapLinearFilter;
+  tex.needsUpdate     = true;
+  if (loadedTextures[leaf]) loadedTextures[leaf].dispose();
+  loadedTextures[leaf] = tex;
+  loadedSizes[leaf]    = { w, h };
+  return new Promise(res => {
+    canvas.toBlob(blob => {
+      if (blob) loadedFiles[leaf] = new File([blob], leaf + '.png', { type: 'image/png' });
+      res();
+    }, 'image/png');
+  });
+}
+
+function showAutoReport(title, lines, warn) {
+  const panel = document.getElementById('auto-report');
+  const head  = panel.querySelector('.ar-head');
+  document.getElementById('ar-title').textContent = title;
+  head.classList.toggle('warn', !!warn);
+  head.classList.toggle('ok', !warn);
+  document.getElementById('ar-body').innerHTML =
+    lines.map(l => `<div class="ar-line ${l.cls || ''}">${l.text}</div>`).join('');
+  panel.classList.add('open');
+}
+document.getElementById('ar-close').addEventListener('click', () =>
+  document.getElementById('auto-report').classList.remove('open'));
+
+document.getElementById('btn-auto').addEventListener('click', () => {
+  document.getElementById('folder-input').click();
+});
+
+document.getElementById('folder-input').addEventListener('change', async e => {
+  const files = Array.from(e.target.files);
+  e.target.value = '';
+  if (!files.length) return;
+  await autoLoadFolder(files);
+});
+
+async function autoLoadFolder(files) {
+  const btn = document.getElementById('btn-auto');
+  if (!lastData || !lastData.groups || !lastData.groups.length) {
+    showAutoReport('Load a VMF first', [
+      { text: 'Open a .vmf map first, then pick its decompiled folder — I use the', cls: 'warn' },
+      { text: 'map’s material list to know which .vmt/.vtf files to pull.', cls: 'warn' },
+    ], true);
+    return;
+  }
+
+  const norm = p => p.replace(/\\/g, '/').toLowerCase();
+  const underMaterials = p => { const i = p.indexOf('materials/'); return i >= 0 ? p.slice(i + 10) : p; };
+
+  // Index every .vmt/.vtf in the folder by both its materials-relative path and
+  // its bare leaf name, so we can match on either.
+  const vmtByPath = new Map(), vmtByLeafF = new Map();
+  const vtfByPath = new Map(), vtfByLeafF = new Map();
+  for (const f of files) {
+    const rel = norm(f.webkitRelativePath || f.name);
+    if (rel.endsWith('.vmt')) {
+      const mp = underMaterials(rel).replace(/\.vmt$/, '');
+      vmtByPath.set(mp, f); vmtByLeafF.set(mp.split('/').pop(), f);
+    } else if (rel.endsWith('.vtf')) {
+      const tp = underMaterials(rel).replace(/\.vtf$/, '');
+      vtfByPath.set(tp, f); vtfByLeafF.set(tp.split('/').pop(), f);
+    }
+  }
+  if (!vmtByPath.size && !vtfByPath.size) {
+    showAutoReport('No materials found', [
+      { text: 'That folder has no .vmt or .vtf files. Pick the decompiled map', cls: 'warn' },
+      { text: 'root — the folder that contains the <b>materials</b> directory.', cls: 'warn' },
+    ], true);
+    return;
+  }
+
+  btn.classList.add('busy');
+  btn.textContent = '⏳ Loading…';
+  await new Promise(r => requestAnimationFrame(r)); // let the busy state paint
+
+  // Which materials does the loaded map actually use?
+  const matPaths = [...new Set(lastData.groups
+    .map(g => g.material ? norm(g.material).replace(/\.vmt$/, '') : '')
+    .filter(Boolean))];
+
+  const missingVmt = [], missingTex = [], failedTex = [];
+  let vmtCount = 0, texCount = 0;
+  const texToDecode = new Map(); // leaf → File (deduped across materials)
+
+  for (const mp of matPaths) {
+    const leaf = mp.split('/').pop();
+    const vf = vmtByPath.get(mp) || vmtByLeafF.get(leaf);
+    if (!vf) { missingVmt.push(mp); continue; }
+    let vmt;
+    try { vmt = parseVmt(await vf.text()); }
+    catch (err) { missingVmt.push(mp + ' (parse error)'); continue; }
+    vmtByLeaf[leaf] = vmt;
+    vmtFileStore[leaf] = vf;
+    vmtCount++;
+    // Only the two rendered base textures need decoding.
+    for (const key of ['$basetexture', '$basetexture2']) {
+      const tp = vmt[key];
+      if (!tp) continue;
+      const tpn = norm(tp).replace(/\.vtf$/, '');
+      const tleaf = tpn.split('/').pop();
+      if (loadedTextures[tleaf] || texToDecode.has(tleaf)) continue;
+      const tf = vtfByPath.get(tpn) || vtfByLeafF.get(tleaf);
+      if (!tf) { missingTex.push(tpn); continue; }
+      texToDecode.set(tleaf, tf);
+    }
+  }
+
+  for (const [tleaf, tf] of texToDecode) {
+    try {
+      const { canvas, width, height } = decodeVTF(await tf.arrayBuffer());
+      await _registerCanvasTexture(tleaf, canvas, width, height);
+      texCount++;
+    } catch (err) {
+      failedTex.push(tleaf + ' — ' + err.message);
+    }
+  }
+
+  applyTextures();
+
+  // Reflect loaded state on the manual buttons too.
+  const vmtN = Object.keys(vmtByLeaf).length, texN = Object.keys(loadedTextures).length;
+  if (vmtN) { const b = document.getElementById('btn-vmt'); b.classList.add('has-vmt'); b.textContent = `≡ VMTs (${vmtN})`; }
+  if (texN) { const b = document.getElementById('btn-tex'); b.classList.add('has-tex'); b.textContent = `▣ Textures (${texN})`; }
+
+  btn.classList.remove('busy');
+  btn.classList.add('has-auto');
+  btn.textContent = '📁 Auto Load';
+
+  // Build the report.
+  const issues = missingVmt.length + missingTex.length + failedTex.length;
+  const lines = [
+    { text: `Materials in map: <b>${matPaths.length}</b>`, cls: 'stat' },
+    { text: `VMTs matched: <b>${vmtCount}</b>`, cls: 'stat' },
+    { text: `Textures decoded: <b>${texCount}</b>`, cls: 'stat' },
+  ];
+  const listMax = 12;
+  const addList = (label, arr, cls) => {
+    if (!arr.length) return;
+    lines.push({ text: `<b>${label} (${arr.length}):</b>`, cls });
+    arr.slice(0, listMax).forEach(x => lines.push({ text: '• ' + x, cls }));
+    if (arr.length > listMax) lines.push({ text: `…and ${arr.length - listMax} more`, cls });
+  };
+  addList('⚠ Missing .vmt', missingVmt, 'warn');
+  addList('⚠ Missing .vtf', missingTex, 'warn');
+  addList('✕ Failed to decode', failedTex, 'err');
+  showAutoReport(issues ? 'Loaded with warnings' : 'All assets loaded ✓', lines, issues > 0);
+}
+
 // ── Skybox ────────────────────────────────────────────────────────────────────
 // Source face suffix → Three.js CubeTexture slot index [+X,-X,+Y,-Y,+Z,-Z]
 // Source: ft=south(-Y in Three), bk=north(+Y), lf=east(+X), rt=west(-X), up=+Z→+Y three, dn=-Y three
@@ -2207,6 +2568,8 @@ function makeBlendMaterial(vmt, grp) {
   const additive    = vmtFlag(vmt, '$additive');
   const translucent = vmtFlag(vmt, '$translucent');
   const needsAlpha  = additive || translucent;
+  const color1      = vmtColor(vmt, '$color');
+  const color2      = vmtColor(vmt, '$color2');
   const mat = new THREE.ShaderMaterial({
     vertexShader:   BLEND_VERT,
     fragmentShader: BLEND_FRAG,
@@ -2221,6 +2584,8 @@ function makeBlendMaterial(vmt, grp) {
       uHasBlend:      { value: hasBlend ? 1.0 : 0.0 },
       uFlat:          { value: flatLight ? 1.0 : 0.0 },
       uTranslucent:   { value: translucent ? 1.0 : 0.0 },
+      uColor1:        { value: new THREE.Vector3(...color1) },
+      uColor2:        { value: new THREE.Vector3(...color2) },
       uFogEnabled:    { value: (fogEnabled && fogParams) ? 1.0 : 0.0 },
       uFogColor:      { value: new THREE.Vector3(...(fogParams ? fogParams.color : [0.5, 0.5, 0.5])) },
       uFogStart:      { value: fogParams ? fogParams.start      : 500.0 },
@@ -2317,6 +2682,9 @@ function clearScene() {
   document.getElementById('btn-tex').textContent = '▣ Textures';
   document.getElementById('btn-vmt').classList.remove('has-vmt');
   document.getElementById('btn-tex').classList.remove('has-tex');
+  document.getElementById('btn-auto').classList.remove('has-auto', 'busy');
+  document.getElementById('btn-auto').textContent = '📁 Auto Load';
+  document.getElementById('auto-report').classList.remove('open');
   clearSkybox();
   document.getElementById('stats').textContent = 'No file loaded';
   document.getElementById('mesh-stats').textContent = '';
